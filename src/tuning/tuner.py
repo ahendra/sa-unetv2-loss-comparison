@@ -229,15 +229,18 @@ class LossTuner:
         y_val: np.ndarray,
         n_epochs: int = 30,
     ):
-        self.cfg       = cfg
-        self.loss_key  = loss_key
-        self.x_train   = x_train
-        self.y_train   = y_train
-        self.x_val     = x_val
-        self.y_val     = y_val
-        self.n_epochs  = n_epochs
-        self.out_dir   = RESULTS_DIR / cfg.name.lower() / "tuning"
+        self.cfg        = cfg
+        self.loss_key   = loss_key
+        self.x_train    = x_train
+        self.y_train    = y_train
+        self.x_val      = x_val
+        self.y_val      = y_val
+        self.n_epochs   = n_epochs
+        self.out_dir    = RESULTS_DIR / cfg.name.lower() / "tuning"
         self.out_dir.mkdir(parents=True, exist_ok=True)
+        self.study_name = f"{cfg.name.lower()}_{loss_key}"
+        self.db_path    = self.out_dir / f"{loss_key}_tuning.db"
+        self.storage    = f"sqlite:///{self.db_path}"
 
     # ── Optuna objective ──────────────────────────────────────────────────────
 
@@ -303,25 +306,43 @@ class LossTuner:
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
         study = optuna.create_study(
-            direction  = "maximize",
-            study_name = f"{self.cfg.name}_{self.loss_key}",
-            sampler    = optuna.samplers.TPESampler(seed=42),
-            pruner     = optuna.pruners.MedianPruner(n_startup_trials=5),
+            study_name  = self.study_name,
+            storage     = self.storage,
+            load_if_exists = True,          # resume jika study sudah ada di SQLite
+            direction   = "maximize",
+            sampler     = optuna.samplers.TPESampler(seed=42),
+            pruner      = optuna.pruners.MedianPruner(n_startup_trials=5),
         )
+
+        finished    = [t for t in study.trials
+                       if t.state.name in ("COMPLETE", "PRUNED")]
+        already_run = len(finished)
+        remaining   = max(0, n_trials - already_run)
 
         print(f"\n  {'═'*58}")
         print(f"  Hyperparameter Tuning — {self.loss_key.upper()} ({self.cfg.name})")
         print(f"  {'═'*58}")
         print(f"  Metode   : Optuna TPE + MedianPruner")
         print(f"  Target   : Maksimalkan F1 Score (val set)")
-        print(f"  Trials   : {n_trials}  |  Epochs/trial: {self.n_epochs}")
+        print(f"  Trials   : {n_trials} total  |  Sudah: {already_run}  |  Sisa: {remaining}")
+        print(f"  Epochs/trial : {self.n_epochs}")
+        print(f"  DB       : {self.db_path}")
         print(f"  Output   : {self.out_dir}")
-        print(f"\n  {'Trial':>5}  {'F1':>8}  {'Best':>8}  Params")
-        print(f"  {'─'*56}")
+
+        if already_run > 0 and remaining == 0:
+            print(f"\n  Semua {n_trials} trials sudah selesai. Memuat hasil dari DB...")
+        elif already_run > 0:
+            print(f"\n  Melanjutkan dari trial #{already_run + 1}...")
+            print(f"\n  {'Trial':>5}  {'F1':>8}  {'Best':>8}  Params")
+            print(f"  {'─'*56}")
+        else:
+            print(f"\n  {'Trial':>5}  {'F1':>8}  {'Best':>8}  Params")
+            print(f"  {'─'*56}")
 
         t0 = time.perf_counter()
-        study.optimize(self._objective, n_trials=n_trials,
-                       callbacks=[self._on_trial_end])
+        if remaining > 0:
+            study.optimize(self._objective, n_trials=remaining,
+                           callbacks=[self._on_trial_end])
         elapsed = time.perf_counter() - t0
 
         # Reconstruct full best params (including derived/constrained values)
@@ -340,9 +361,10 @@ class LossTuner:
             "dataset"           : self.cfg.name,
             "best_f1"           : round(study.best_value, 6),
             "best_params"       : best_params,
-            "n_trials"          : n_trials,
+            "n_trials"          : len(study.trials),
             "n_epochs_per_trial": self.n_epochs,
             "elapsed_sec"       : round(elapsed, 2),
+            "db_path"           : str(self.db_path),
             "all_trials": [
                 {
                     "number": t.number,
@@ -453,7 +475,9 @@ class LossTuner:
         print(f"  Tuning Selesai — {result['loss_key'].upper()} ({result['dataset']})")
         print(f"  {'═'*58}")
         print(f"  Best F1     : {result['best_f1']:.6f}")
+        print(f"  Total trials: {result['n_trials']}")
         print(f"  Elapsed     : {result['elapsed_sec']:.0f}s")
+        print(f"  DB (resume) : {result['db_path']}")
         print(f"  JSON        : {json_path}")
         print(f"\n  Best Params :")
         for k, v in result["best_params"].items():

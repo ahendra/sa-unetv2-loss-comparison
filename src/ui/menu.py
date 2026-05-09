@@ -332,16 +332,46 @@ def _ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
 
 
 def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int) -> None:
-    x_train, y_train, x_val, y_val = _load_training_data(cfg)
-    if x_train is None:
-        return
-
     try:
-        import optuna  # noqa: F401
+        import optuna
     except ImportError:
         print("\n  [ERROR] optuna tidak terinstall.")
         print("          pip install optuna")
         input("  Tekan Enter untuk kembali...")
+        return
+
+    # Cek apakah ada sesi tuning sebelumnya di SQLite
+    from config import RESULTS_DIR
+    db_path = RESULTS_DIR / cfg.name.lower() / "tuning" / f"{loss_key}_tuning.db"
+    if db_path.exists():
+        study_name = f"{cfg.name.lower()}_{loss_key}"
+        try:
+            existing = optuna.load_study(
+                study_name=study_name,
+                storage=f"sqlite:///{db_path}",
+            )
+            n_done = len(existing.trials)
+            best   = existing.best_value if existing.best_trial else None
+            print(f"\n  Ditemukan sesi tuning sebelumnya untuk '{loss_key}':")
+            print(f"    Trials selesai : {n_done}")
+            if best is not None:
+                print(f"    Best F1 saat ini: {best:.4f}")
+            print()
+            print("  [1] Lanjutkan (resume)")
+            print("  [2] Mulai baru (hapus sesi lama)")
+            while True:
+                raw = input("\n  Pilihan Anda [1/2]: ").strip()
+                if raw in ("1", "2"):
+                    break
+                print("  Masukkan 1 atau 2.")
+            if raw == "2":
+                db_path.unlink()
+                print("  Sesi lama dihapus. Memulai tuning baru...")
+        except Exception:
+            pass  # DB ada tapi tidak bisa dibaca — biarkan tuner tangani
+
+    x_train, y_train, x_val, y_val = _load_training_data(cfg)
+    if x_train is None:
         return
 
     tuner = LossTuner(cfg, loss_key, x_train, y_train, x_val, y_val,
