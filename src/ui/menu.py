@@ -28,7 +28,7 @@ def _header(title: str) -> None:
 def _clear():
     try:
         from IPython.display import clear_output
-        clear_output(wait=True)
+        clear_output(wait=False)
     except ImportError:
         os.system('cls' if os.name == 'nt' else 'clear')
 
