@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# Large data — upload manual ke Google Drive
+datasets/
+
+# Generated outputs — disimpan di Google Drive saat di Colab
+weights/
+results/
+
+# Windows
+Thumbs.db
+desktop.ini
+
+# IDE
+.vscode/
+.idea/
