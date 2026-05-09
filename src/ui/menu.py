@@ -29,6 +29,8 @@ def _clear():
     try:
         from IPython.display import clear_output
         clear_output(wait=False)
+        import sys
+        sys.stdout.flush()
     except ImportError:
         os.system('cls' if os.name == 'nt' else 'clear')
 
@@ -39,6 +41,8 @@ def _prompt(options: list[str], back_label: str = "Back") -> int:
         print(f"  [{i}] {opt}")
     if back_label:
         print(f"  [0] {back_label}")
+    import sys
+    sys.stdout.flush()
     while True:
         raw = input("\n  Pilihan Anda: ").strip()
         if raw.isdigit():
