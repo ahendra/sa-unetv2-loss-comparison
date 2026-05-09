@@ -22,7 +22,7 @@ def _resolve_dirs() -> Tuple[Path, Path, Path]:
         from google.colab import drive
         print("  Google Colab terdeteksi. Mounting Google Drive...")
         drive.mount('/content/drive')
-        root = Path('/content/drive/MyDrive/sa_unetv2')
+        root = Path('/content/drive/MyDrive/Kuliah/Tesis/Program/sa_unetv2_loss_comparison')
         root.mkdir(parents=True, exist_ok=True)
         (root / 'weights').mkdir(exist_ok=True)
         (root / 'results').mkdir(exist_ok=True)
