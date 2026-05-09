@@ -56,7 +56,7 @@ class DriveConfig:
 
     # Test set
     test_images: str = str(_DATASETS_DIR / "DRIVE" / "test" / "images")
-    test_labels: str = str(_DATASETS_DIR / "DRIVE" / "test" / "1st_manual")
+    test_labels: str = str(_DATASETS_DIR / "DRIVE" / "test" / "labels")
     test_masks: str  = str(_DATASETS_DIR / "DRIVE" / "test" / "mask")
     use_mask_eval: bool = True
 

@@ -207,8 +207,13 @@ class ModelEvaluator:
     def _save_results(self, loss_name: str, metrics: Dict) -> None:
         path = self._result_path(loss_name)
         path.parent.mkdir(parents=True, exist_ok=True)
+        _skip = {"inference_time_sec", "num_images"}
+        pct = {
+            k: (round(v * 100, 4) if "betti" not in k and k not in _skip else v)
+            for k, v in metrics.items()
+        }
         with open(path, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(pct, f, indent=2)
         print(f"  Results saved to: {path}")
 
     def _print_results(self, loss_name: str, metrics: Dict) -> None:
@@ -225,10 +230,14 @@ class ModelEvaluator:
             "betti0_error": "Betti-0 Error (β0)",
             "betti1_error": "Betti-1 Error (β1)",
         }
+        _skip = {"inference_time_sec", "num_images"}
         for key, lbl in labels.items():
             if key in metrics:
-                fmt = ".4f" if "betti" not in key else ".2f"
-                print(f"    {lbl:<28}: {metrics[key]:{fmt}}")
+                if "betti" in key:
+                    print(f"    {lbl:<28}: {metrics[key]:.2f}")
+                else:
+                    val = metrics[key] * 100 if metrics[key] <= 1.0 else metrics[key]
+                    print(f"    {lbl:<28}: {val:.2f}%")
 
     def _result_path(self, loss_name: str) -> Path:
         return (RESULTS_DIR / self.cfg.name.lower()

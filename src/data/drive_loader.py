@@ -94,6 +94,16 @@ class DriveDataLoader:
         y_test = np.array(y_list, dtype=np.float32) / 255.0
         masks  = np.array(m_list, dtype=np.float32) / 255.0 if m_list else None
 
+        if self.cfg.use_mask_eval and masks is None:
+            print(
+                f"  [WARN] use_mask_eval=True tetapi tidak ada file mask yang ditemukan "
+                f"di: {mask_dir}\n"
+                f"         Evaluasi akan dilakukan TANPA FOV mask. "
+                f"Hasil metrik mungkin berbeda dari paper."
+            )
+        elif masks is not None:
+            print(f"  FOV mask dimuat: {len(m_list)} file — evaluasi WITH FOV mask.")
+
         x_padded = self._pad_batch(x_test)
         return x_padded, y_test, masks
 

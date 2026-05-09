@@ -420,8 +420,8 @@ _METRIC_KEYS = [
     "mcc", "f1", "jaccard", "cldice", "betti0_error", "betti1_error",
 ]
 _METRIC_HEADERS = [
-    "Loss Function", "Accuracy", "Sensitivity", "Specificity",
-    "AUC", "MCC", "F1", "Jaccard", "clDice", "β0 Err", "β1 Err",
+    "Loss Function", "Accuracy (%)", "Sensitivity (%)", "Specificity (%)",
+    "AUC (%)", "MCC (%)", "F1 (%)", "Jaccard (%)", "clDice (%)", "β0 Err", "β1 Err",
 ]
 _LOWER_IS_BETTER = {"betti0_error", "betti1_error"}
 
@@ -516,14 +516,14 @@ def _view_all_results() -> None:
             num_rows.append(nums)
             str_rows.append([
                 loss_label,
-                f"{m.get('accuracy',     float('nan')):.4f}",
-                f"{m.get('sensitivity',  float('nan')):.4f}",
-                f"{m.get('specificity',  float('nan')):.4f}",
-                f"{m.get('auc',          float('nan')):.4f}",
-                f"{m.get('mcc',          float('nan')):.4f}",
-                f"{m.get('f1',           float('nan')):.4f}",
-                f"{m.get('jaccard',      float('nan')):.4f}",
-                f"{m.get('cldice',       float('nan')):.4f}",
+                f"{m.get('accuracy',     float('nan')):.2f}",
+                f"{m.get('sensitivity',  float('nan')):.2f}",
+                f"{m.get('specificity',  float('nan')):.2f}",
+                f"{m.get('auc',          float('nan')):.2f}",
+                f"{m.get('mcc',          float('nan')):.2f}",
+                f"{m.get('f1',           float('nan')):.2f}",
+                f"{m.get('jaccard',      float('nan')):.2f}",
+                f"{m.get('cldice',       float('nan')):.2f}",
                 f"{m.get('betti0_error', float('nan')):.2f}",
                 f"{m.get('betti1_error', float('nan')):.2f}",
             ])
