@@ -331,7 +331,8 @@ def _ask_int(prompt: str, default: int, lo: int, hi: int) -> int:
         print(f"  Masukkan angka antara {lo}–{hi}.")
 
 
-def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int) -> None:
+def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int,
+                       auto_resume: bool = False) -> None:
     try:
         import optuna
     except ImportError:
@@ -350,23 +351,32 @@ def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int) -> None
                 study_name=study_name,
                 storage=f"sqlite:///{db_path}",
             )
-            n_done = len(existing.trials)
+            finished = [t for t in existing.trials
+                        if t.state.name in ("COMPLETE", "PRUNED")]
+            n_done = len(finished)
             best   = existing.best_value if existing.best_trial else None
             print(f"\n  Ditemukan sesi tuning sebelumnya untuk '{loss_key}':")
             print(f"    Trials selesai : {n_done}")
             if best is not None:
                 print(f"    Best F1 saat ini: {best:.4f}")
-            print()
-            print("  [1] Lanjutkan (resume)")
-            print("  [2] Mulai baru (hapus sesi lama)")
-            while True:
-                raw = input("\n  Pilihan Anda [1/2]: ").strip()
-                if raw in ("1", "2"):
-                    break
-                print("  Masukkan 1 atau 2.")
-            if raw == "2":
-                db_path.unlink()
-                print("  Sesi lama dihapus. Memulai tuning baru...")
+
+            if auto_resume:
+                if n_done >= n_trials:
+                    print(f"  [AUTO] Semua {n_trials} trials sudah selesai. Dilewati.")
+                    return
+                print(f"  [AUTO] Resume otomatis — melanjutkan dari trial #{n_done + 1}...")
+            else:
+                print()
+                print("  [1] Lanjutkan (resume)")
+                print("  [2] Mulai baru (hapus sesi lama)")
+                while True:
+                    raw = input("\n  Pilihan Anda [1/2]: ").strip()
+                    if raw in ("1", "2"):
+                        break
+                    print("  Masukkan 1 atau 2.")
+                if raw == "2":
+                    db_path.unlink()
+                    print("  Sesi lama dihapus. Memulai tuning baru...")
         except Exception:
             pass  # DB ada tapi tidak bisa dibaca — biarkan tuner tangani
 
@@ -377,7 +387,8 @@ def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int) -> None
     tuner = LossTuner(cfg, loss_key, x_train, y_train, x_val, y_val,
                       n_epochs=n_epochs)
     tuner.tune(n_trials=n_trials)
-    input("\n  Tekan Enter untuk kembali...")
+    if not auto_resume:
+        input("\n  Tekan Enter untuk kembali...")
 
 
 def _tuning_menu(cfg) -> None:
@@ -401,7 +412,8 @@ def _tuning_menu(cfg) -> None:
             print(f"\n{'=' * 60}")
             print(f"  {loss_label}")
             print('=' * 60)
-            _run_tuning_single(cfg, loss_key, n_trials, n_epochs)
+            _run_tuning_single(cfg, loss_key, n_trials, n_epochs, auto_resume=True)
+        input("\n  Semua tuning selesai. Tekan Enter untuk kembali...")
     else:
         loss_key, _ = loss_items[choice - 1]
         _run_tuning_single(cfg, loss_key, n_trials, n_epochs)
