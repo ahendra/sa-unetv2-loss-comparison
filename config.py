@@ -185,8 +185,8 @@ LOSS_FUNCTIONS = {
 #tuning STARE
 LOSS_PARAMS = {
     "bce_mcc": {
-        "lambda_bce": 0.362397808134481,
-        "lambda_mcc": 0.63760219
+        "lambda_bce": 0.5, #0.362397808134481,
+        "lambda_mcc": 0.5, #0.63760219
     },
     "dice": {
         "smooth": 0.5169304244323399,
