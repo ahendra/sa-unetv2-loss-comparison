@@ -151,65 +151,65 @@ LOSS_FUNCTIONS = {
 # }
 
 #tuning DRIVE
-LOSS_PARAMS = {
-    "bce_mcc": {
-        "lambda_bce": 0.3023440621957503,
-        "lambda_mcc": 0.69765594,
-    },
-    "dice": {
-        "smooth": 1.5115319924378078e-05,
-    },
-    "focal": {
-        "alpha": 0.4850793731376367,
-        "gamma": 0.7591057855231964,
-        "smooth": 0.00012685264999107396,
-    },
-    "cldice": {
-        "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-        "iters":  25,
-        "alpha":  0.3227210948926833,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
-    },
-    "dice_ssim": {
-        "lambda_dice": 0.589607963945301,
-        "lambda_ssim": 0.41039204,
-        "smooth": 0.01231826460645177,        
-    },
-    # Ref: "Retinal vascular segmentation network based on dual-scale
-    # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
-    "bce_ssim": {
-        "lambda_bce": 0.4240148908422406,
-        "lambda_ssim": 0.57598511
-    },
-}
-
-#tuning STARE
 # LOSS_PARAMS = {
 #     "bce_mcc": {
-#         "lambda_bce": 0.5,
-#         "lambda_mcc": 0.5,
+#         "lambda_bce": 0.3023440621957503,
+#         "lambda_mcc": 0.69765594,
 #     },
 #     "dice": {
-#         "smooth": 1e-6,
+#         "smooth": 1.5115319924378078e-05,
 #     },
 #     "focal": {
-#         "alpha": 0.25,
-#         "gamma": 2.0,
-#         "smooth": 1e-6,
+#         "alpha": 0.4850793731376367,
+#         "gamma": 0.7591057855231964,
+#         "smooth": 0.00012685264999107396,
 #     },
 #     "cldice": {
 #         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-#         "iters":  10,
-#         "alpha":  0.5,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
+#         "iters":  25,
+#         "alpha":  0.3227210948926833,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
 #     },
 #     "dice_ssim": {
-#         "lambda_dice": 0.5,
-#         "lambda_ssim": 0.5,
-#         "smooth": 1e-6,
+#         "lambda_dice": 0.589607963945301,
+#         "lambda_ssim": 0.41039204,
+#         "smooth": 0.01231826460645177,        
 #     },
 #     # Ref: "Retinal vascular segmentation network based on dual-scale
 #     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
 #     "bce_ssim": {
-#         "lambda_bce":  0.5,
-#         "lambda_ssim": 0.5,
+#         "lambda_bce": 0.4240148908422406,
+#         "lambda_ssim": 0.57598511
 #     },
 # }
+
+#tuning STARE
+LOSS_PARAMS = {
+    "bce_mcc": {
+        "lambda_bce": 0.362397808134481,
+        "lambda_mcc": 0.63760219
+    },
+    "dice": {
+        "smooth": 0.5169304244323399,
+    },
+    "focal": {
+        "alpha": 0.5375999300628687,
+        "gamma": 1.0960955962011756,
+        "smooth": 7.4373220274892e-06,
+    },
+    "cldice": {
+        "smooth": 1.0,
+        "iters": 28,
+        "alpha": 0.35130001769736685,
+    },
+    "dice_ssim": {
+        "lambda_dice": 0.6542783048914624,
+        "lambda_ssim": 0.3457217,
+        "smooth": 0.13929185486422527,    
+    },
+    # Ref: "Retinal vascular segmentation network based on dual-scale
+    # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
+    "bce_ssim": {
+        "lambda_bce": 0.501566111746115,
+        "lambda_ssim": 0.49843389,
+    },
+}
