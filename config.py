@@ -70,6 +70,9 @@ class DriveConfig:
     reduce_lr_patience: int  = 10
     reduce_lr_min: float     = 1e-6
     early_stop_patience: int = 20
+    # Skenario 1 (SA-UNetV2 paper): "val_accuracy"
+    # Skenario 2 (konsisten dengan EarlyStopping): "val_loss"
+    checkpoint_monitor: str = "val_loss"
 
 
 @dataclass
@@ -103,6 +106,9 @@ class StareConfig:
     reduce_lr_patience: int  = 20
     reduce_lr_min: float     = 1e-8
     early_stop_patience: int = 30
+    # Skenario 1 (SA-UNetV2 paper): "val_accuracy"
+    # Skenario 2 (konsisten dengan EarlyStopping): "val_loss"
+    checkpoint_monitor: str = "val_loss"
 
 
 # ── Loss function registry ────────────────────────────────────────────────────
@@ -119,68 +125,68 @@ LOSS_FUNCTIONS = {
 # ── Loss function hyperparameters ─────────────────────────────────────────────
 #without tuning
 
-# LOSS_PARAMS = {
-#     "bce_mcc": {
-#         "lambda_bce": 0.5,
-#         "lambda_mcc": 0.5,
-#     },
-#     "dice": {
-#         "smooth": 1e-6,
-#     },
-#     "focal": {
-#         "alpha": 0.25,
-#         "gamma": 2.0,
-#         "smooth": 1e-6,
-#     },
-#     "cldice": {
-#         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-#         "iters":  10,
-#         "alpha":  0.5,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
-#     },
-#     "dice_ssim": {
-#         "lambda_dice": 0.5,
-#         "lambda_ssim": 0.5,
-#         "smooth": 1e-6,
-#     },
-#     # Ref: "Retinal vascular segmentation network based on dual-scale
-#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
-#     "bce_ssim": {
-#         "lambda_bce":  0.5,
-#         "lambda_ssim": 0.5,
-#     },
-# }
-
-#tuning DRIVE
 LOSS_PARAMS = {
     "bce_mcc": {
-        "lambda_bce": 0.5, #0.3023440621957503,
-        "lambda_mcc": 0.5, #0.69765594,
+        "lambda_bce": 0.5,
+        "lambda_mcc": 0.5,
     },
     "dice": {
-        "smooth": 1.5115319924378078e-05,
+        "smooth": 1e-6,
     },
     "focal": {
-        "alpha": 0.4850793731376367,
-        "gamma": 0.7591057855231964,
-        "smooth": 0.00012685264999107396,
+        "alpha": 0.25,
+        "gamma": 2.0,
+        "smooth": 1e-6,
     },
     "cldice": {
         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-        "iters":  25,
-        "alpha":  0.3227210948926833,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
+        "iters":  10,
+        "alpha":  0.5,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
     },
     "dice_ssim": {
-        "lambda_dice": 0.589607963945301,
-        "lambda_ssim": 0.41039204,
-        "smooth": 0.01231826460645177,        
+        "lambda_dice": 0.5,
+        "lambda_ssim": 0.5,
+        "smooth": 1e-6,
     },
     # Ref: "Retinal vascular segmentation network based on dual-scale
     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
     "bce_ssim": {
-        "lambda_bce": 0.4240148908422406,
-        "lambda_ssim": 0.57598511
+        "lambda_bce":  0.5,
+        "lambda_ssim": 0.5,
     },
 }
+
+#tuning DRIVE
+# LOSS_PARAMS = {
+#     "bce_mcc": {
+#         "lambda_bce": 0.5, #0.3023440621957503,
+#         "lambda_mcc": 0.5, #0.69765594,
+#     },
+#     "dice": {
+#         "smooth": 1.5115319924378078e-05,
+#     },
+#     "focal": {
+#         "alpha": 0.4850793731376367,
+#         "gamma": 0.7591057855231964,
+#         "smooth": 0.00012685264999107396,
+#     },
+#     "cldice": {
+#         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
+#         "iters":  25,
+#         "alpha":  0.3227210948926833,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
+#     },
+#     "dice_ssim": {
+#         "lambda_dice": 0.589607963945301,
+#         "lambda_ssim": 0.41039204,
+#         "smooth": 0.01231826460645177,        
+#     },
+#     # Ref: "Retinal vascular segmentation network based on dual-scale
+#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
+#     "bce_ssim": {
+#         "lambda_bce": 0.4240148908422406,
+#         "lambda_ssim": 0.57598511
+#     },
+# }
 
 #tuning STARE
 # LOSS_PARAMS = {

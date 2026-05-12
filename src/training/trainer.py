@@ -86,14 +86,17 @@ class ModelTrainer:
         print(f"  Train samples: {len(x_train)}  Val samples: {len(x_val)}")
         print(f"  Weights will be saved to: {weight_path}")
 
+        ckpt_monitor = self.cfg.checkpoint_monitor
+        ckpt_mode    = 'min' if 'loss' in ckpt_monitor else 'max'
+
         callbacks = [
             _ProgressCallback(self.cfg.epochs),
             ModelCheckpoint(
                 str(weight_path),
-                monitor='val_accuracy',
+                monitor=ckpt_monitor,
                 save_best_only=True,
                 save_weights_only=True,
-                mode='max',
+                mode=ckpt_mode,
                 verbose=0,
             ),
             ReduceLROnPlateau(
