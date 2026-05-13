@@ -165,12 +165,12 @@ LOSS_PARAMS = {
     "focal": {
         "alpha": 0.25,
         "gamma": 2.0,
-        "smooth": 1e-6,
+        "smooth": 1e-7, #epsilon untuk mencegah log(0) 1e-7
     },
     "cldice": {
         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-        "iters":  10,
-        "alpha":  0.5,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
+        "iters":  25,   # Shit et al. CVPR 2021: 5...25, the iters its depends of the maximum diameter of vessel in datasets, for DRIVE and STARE the characteristic of vessel is big, so use maximum iters = 25 
+        "alpha":  0.2,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, where α ∈ [0, 0.5], for best clDice α=0.5 and for balance F1 α=0.2
     },
     "dice_ssim": {
         "lambda_dice": 0.5,
