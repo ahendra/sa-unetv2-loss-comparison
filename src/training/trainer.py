@@ -1,8 +1,9 @@
+import json
 import os
 import sys
 import time
 from pathlib import Path
-from typing import Callable, Tuple, Union
+from typing import Callable, Dict, Optional, Tuple, Union
 
 import keras
 import numpy as np
@@ -14,7 +15,7 @@ from keras.callbacks import (
 )
 from keras.optimizers import Adam
 
-from config import DriveConfig, StareConfig, WEIGHTS_DIR
+from config import DriveConfig, StareConfig, RESULTS_DIR, WEIGHTS_DIR
 from src.models import build_sa_unetv2
 
 
@@ -114,7 +115,7 @@ class ModelTrainer:
             ),
         ]
 
-        model.fit(
+        history = model.fit(
             x_train, y_train,
             epochs=self.cfg.epochs,
             batch_size=self.cfg.batch_size,
@@ -124,6 +125,7 @@ class ModelTrainer:
             verbose=0,
         )
 
+        self._save_history(loss_name, history.history)
         return model
 
     def load_weights(self, loss_name: str) -> keras.Model:
@@ -145,6 +147,26 @@ class ModelTrainer:
     def weights_exist(self, loss_name: str) -> bool:
         return self._weight_path(loss_name).exists()
 
+    def history_exists(self, loss_name: str) -> bool:
+        return self._history_path(loss_name).exists()
+
+    def load_history(self, loss_name: str) -> Optional[Dict]:
+        path = self._history_path(loss_name)
+        if not path.exists():
+            return None
+        with open(path) as f:
+            return json.load(f)
+
+    def _save_history(self, loss_name: str, history_dict: dict) -> None:
+        path = self._history_path(loss_name)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        serializable = {k: [float(v) for v in vals] for k, vals in history_dict.items()}
+        with open(path, "w") as f:
+            json.dump(serializable, f, indent=2)
+
     def _weight_path(self, loss_name: str) -> Path:
         dataset_dir = self.cfg.name.lower()
         return WEIGHTS_DIR / dataset_dir / f"{self.cfg.name.lower()}_{loss_name}.weights.h5"
+
+    def _history_path(self, loss_name: str) -> Path:
+        return RESULTS_DIR / self.cfg.name.lower() / "history" / f"{loss_name}_history.json"

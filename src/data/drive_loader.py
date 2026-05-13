@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 
 from config import DriveConfig
+from src.preprocessing import PreprocessingPipeline, build_pipeline
 
 
 def _read_image(path: str, mode: str = 'RGB') -> np.ndarray:
@@ -38,10 +39,13 @@ def _pad_to(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
 class DriveDataLoader:
     """Loads and preprocesses DRIVE retinal vessel dataset."""
 
-    def __init__(self, cfg: DriveConfig):
+    def __init__(self, cfg: DriveConfig, pipeline: Optional[PreprocessingPipeline] = None):
         self.cfg = cfg
         self.target_h = cfg.input_size[0]
         self.target_w = cfg.input_size[1]
+        self._pipeline = pipeline or build_pipeline(
+            cfg.preprocessing_mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid
+        )
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -72,6 +76,7 @@ class DriveDataLoader:
                 continue
 
             im    = _read_image(os.path.join(test_dir, fname), mode='RGB')
+            im    = self._pipeline.apply(im)
             label = _read_image(label_path, mode='L')
 
             im    = cv2.resize(im,    (self.cfg.original_w, self.cfg.original_h))
@@ -134,6 +139,7 @@ class DriveDataLoader:
                 continue
 
             im    = _read_image(os.path.join(img_dir, fname), mode='RGB')
+            im    = self._pipeline.apply(im)
             label = _read_image(label_path, mode='L')
 
             im_pad    = _pad_to(im,    self.target_h, self.target_w)

@@ -11,6 +11,10 @@ from src.evaluation import ModelEvaluator
 from src.losses import get_loss_function
 from src.training import ModelTrainer
 from src.tuning import LossTuner
+from src.reporting import (
+    AblationReporter, ComparisonReporter, EnvironmentReporter,
+    HistoryReporter, VisualizationReporter,
+)
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -419,6 +423,99 @@ def _tuning_menu(cfg) -> None:
         _run_tuning_single(cfg, loss_key, n_trials, n_epochs)
 
 
+# ── Reporting ─────────────────────────────────────────────────────────────────
+
+def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
+    _header(f"Reporting & Analysis — {cfg.name}")
+    print("  Output tersimpan di: results/<dataset>/reports/\n")
+
+    base = RESULTS_DIR / cfg.name.lower() / "reports"
+
+    choice = _prompt(
+        [
+            "4.1  Lingkungan Eksperimen",
+            "4.2  Preprocessing Ablation Study",
+            "4.4  Training History Curves",
+            "4.5  Segmentation Visualization Grid",
+            "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
+            "Generate Semua Report",
+        ],
+        back_label="Kembali",
+    )
+    if choice == 0:
+        return
+    elif choice == 1:
+        _run_env_report(base / "section_4_1_environment")
+    elif choice == 2:
+        _run_ablation_report(base / "section_4_2_ablation")
+    elif choice == 3:
+        _run_history_report(cfg, trainer, base / "section_4_4_history")
+    elif choice == 4:
+        _run_visualization_report(cfg, trainer, base / "section_4_5_visualization")
+    elif choice == 5:
+        _run_comparison_report(cfg, base / "section_4_6_comparison")
+    elif choice == 6:
+        _run_all_reports(cfg, trainer, base)
+
+
+def _run_env_report(out_dir) -> None:
+    reporter = EnvironmentReporter(out_dir)
+    reporter.report()
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_ablation_report(out_dir) -> None:
+    print("\n  Preprocessing Ablation Study")
+    print("  Melatih BCE+MCC pada DRIVE dengan 3 kondisi preprocessing.")
+    n_epochs = _ask_int("Epochs per kondisi (gunakan 150 untuk hasil publikasi)", 50, 5, 150)
+    reporter = AblationReporter(out_dir)
+    reporter.run(n_epochs=n_epochs)
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_history_report(cfg, trainer: ModelTrainer, out_dir) -> None:
+    reporter = HistoryReporter(cfg, trainer, out_dir)
+    paths = reporter.generate_all()
+    if paths:
+        print(f"\n  {len(paths)} kurva training tersimpan.")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_visualization_report(cfg, trainer: ModelTrainer, out_dir) -> None:
+    x_test, y_test, masks, restore_fn = _load_test_data(cfg)
+    if x_test is None:
+        return
+    n_max = len(x_test)
+    n     = min(_ask_int(f"Jumlah gambar sampel (max {n_max})", 3, 1, n_max), n_max)
+    reporter = VisualizationReporter(cfg, out_dir, n_samples=n)
+    reporter.generate(x_test, y_test, list(range(n)))
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_comparison_report(cfg, out_dir) -> None:
+    reporter = ComparisonReporter(out_dir)
+    paths = reporter.generate_all(dataset=cfg.name.lower())
+    if paths:
+        print(f"\n  {len(paths)} file comparison tersimpan.")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
+    print("\n  Generating semua reports...\n")
+    _run_env_report(base / "section_4_1_environment")
+    HistoryReporter(cfg, trainer, base / "section_4_4_history").generate_all()
+
+    x_test, y_test, masks, _ = _load_test_data(cfg)
+    if x_test is not None:
+        VisualizationReporter(cfg, base / "section_4_5_visualization").generate(
+            x_test, y_test, list(range(min(3, len(x_test))))
+        )
+
+    ComparisonReporter(base / "section_4_6_comparison").generate_all(cfg.name.lower())
+    print(f"\n  Semua reports tersimpan di: {base}")
+    input("\n  Tekan Enter untuk kembali...")
+
+
 # ── Dataset Sub-menu ──────────────────────────────────────────────────────────
 
 def _dataset_menu(dataset_name: str) -> None:
@@ -440,6 +537,7 @@ def _dataset_menu(dataset_name: str) -> None:
                 "Training Model",
                 "Evaluasi Model",
                 "Hyperparameter Tuning",
+                "Reporting & Analysis",
             ],
             back_label="Kembali ke Main Menu",
         )
@@ -457,6 +555,8 @@ def _dataset_menu(dataset_name: str) -> None:
             _evaluation_menu(trainer, evaluator, cfg)
         elif choice == 4:
             _tuning_menu(cfg)
+        elif choice == 5:
+            _reporting_menu(cfg, trainer)
 
 
 # ── All Results View ──────────────────────────────────────────────────────────

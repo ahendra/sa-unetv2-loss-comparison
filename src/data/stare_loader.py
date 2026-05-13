@@ -1,5 +1,5 @@
 import os
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -7,6 +7,7 @@ from PIL import Image
 from sklearn.model_selection import train_test_split
 
 from config import StareConfig
+from src.preprocessing import PreprocessingPipeline, build_pipeline
 
 
 def _pad_symmetric(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
@@ -23,11 +24,14 @@ def _pad_symmetric(img: np.ndarray, target_h: int, target_w: int) -> np.ndarray:
 class StareDataLoader:
     """Loads and preprocesses STARE retinal vessel dataset."""
 
-    def __init__(self, cfg: StareConfig):
+    def __init__(self, cfg: StareConfig, pipeline: Optional[PreprocessingPipeline] = None):
         self.cfg = cfg
         self.target_h = cfg.input_size[0]
         self.target_w = cfg.input_size[1]
         self._original_test_shapes: List[Tuple[int, int]] = []
+        self._pipeline = pipeline or build_pipeline(
+            cfg.preprocessing_mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid
+        )
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -75,6 +79,7 @@ class StareDataLoader:
                 continue
 
             im    = np.array(Image.open(os.path.join(test_dir, fname)).convert('RGB'))
+            im    = self._pipeline.apply(im)
             label = np.array(Image.open(label_path).convert('L'))
 
             self._original_test_shapes.append(im.shape[:2])
@@ -121,6 +126,7 @@ class StareDataLoader:
                     continue
 
                 img   = np.array(Image.open(os.path.join(img_dir, fname)).convert('RGB'))
+                img   = self._pipeline.apply(img)
                 label = np.array(Image.open(label_path).convert('L'))
 
                 img_pad = _pad_symmetric(img, self.target_h, self.target_w)

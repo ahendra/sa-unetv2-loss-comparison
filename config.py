@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Tuple
 
+# Valid preprocessing modes — used by build_pipeline() factory
+PREPROCESSING_MODES = ("rgb", "green", "green_clahe")
+
 
 BASE_DIR = Path(__file__).parent
 
@@ -60,7 +63,7 @@ class DriveConfig:
     test_masks: str  = str(_DATASETS_DIR / "DRIVE" / "test" / "mask")
     use_mask_eval: bool = True
 
-    # Training hyper-parameters
+    # ── Training hyper-parameters (SA-UNetV2 original paper — DO NOT CHANGE) ──
     batch_size: int       = 8
     epochs: int           = 150
     learning_rate: float  = 1e-3
@@ -73,6 +76,19 @@ class DriveConfig:
     # Skenario 1 (SA-UNetV2 paper): "val_accuracy"
     # Skenario 2 (konsisten dengan EarlyStopping): "val_loss"
     checkpoint_monitor: str = "val_loss"
+
+    # ── Preprocessing ─────────────────────────────────────────────────────────
+    # "rgb"         → original pipeline, no change (reproduces SA-UNetV2 paper)
+    # "green"       → green channel extraction only (input channels: 1)
+    # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
+    preprocessing_mode: str  = "rgb"
+    clahe_clip_limit: float  = 2.0   # Liskowski & Krawiec (2016); Wang et al. (2020)
+    clahe_tile_grid: int     = 8     # OpenCV default; standard in retinal segmentation
+
+    def __post_init__(self):
+        h, w, _ = self.input_size
+        channels = 1 if self.preprocessing_mode in ("green", "green_clahe") else 3
+        self.input_size = (h, w, channels)
 
 
 @dataclass
@@ -96,7 +112,7 @@ class StareConfig:
     test_labels: str      = str(_DATASETS_DIR / "STARE" / "test" / "labels")
     use_mask_eval: bool   = False
 
-    # Training hyper-parameters
+    # ── Training hyper-parameters (SA-UNetV2 original paper — DO NOT CHANGE) ──
     batch_size: int       = 2
     epochs: int           = 150
     learning_rate: float  = 1e-3
@@ -109,6 +125,19 @@ class StareConfig:
     # Skenario 1 (SA-UNetV2 paper): "val_accuracy"
     # Skenario 2 (konsisten dengan EarlyStopping): "val_loss"
     checkpoint_monitor: str = "val_loss"
+
+    # ── Preprocessing ─────────────────────────────────────────────────────────
+    # "rgb"         → original pipeline, no change (reproduces SA-UNetV2 paper)
+    # "green"       → green channel extraction only (input channels: 1)
+    # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
+    preprocessing_mode: str  = "rgb"
+    clahe_clip_limit: float  = 2.0   # Liskowski & Krawiec (2016); Wang et al. (2020)
+    clahe_tile_grid: int     = 8     # OpenCV default; standard in retinal segmentation
+
+    def __post_init__(self):
+        h, w, _ = self.input_size
+        channels = 1 if self.preprocessing_mode in ("green", "green_clahe") else 3
+        self.input_size = (h, w, channels)
 
 
 # ── Loss function registry ────────────────────────────────────────────────────
@@ -133,30 +162,20 @@ LOSS_PARAMS = {
     "dice": {
         "smooth": 1e-6,
     },
-    # "focal": {
-    #     "alpha": 0.25,
-    #     "gamma": 2.0,
-    #     "smooth": 1e-6,
-    # },
     "focal": {
-        "alpha": 0.5375999300628687,
-        "gamma": 1.0960955962011756,
-        "smooth": 7.4373220274892e-06,
-     },
+        "alpha": 0.25,
+        "gamma": 2.0,
+        "smooth": 1e-6,
+    },
     "cldice": {
         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
         "iters":  10,
         "alpha":  0.5,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
     },
-    # "dice_ssim": {
-    #     "lambda_dice": 0.5,
-    #     "lambda_ssim": 0.5,
-    #     "smooth": 1e-6,
-    # },
     "dice_ssim": {
-        "lambda_dice": 0.589607963945301,
-        "lambda_ssim": 0.41039204,
-        "smooth": 0.01231826460645177,
+        "lambda_dice": 0.5,
+        "lambda_ssim": 0.5,
+        "smooth": 1e-6,
     },
     # Ref: "Retinal vascular segmentation network based on dual-scale
     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
