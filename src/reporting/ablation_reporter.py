@@ -10,6 +10,8 @@ from config import DriveConfig, LOSS_FUNCTIONS, RESULTS_DIR, WEIGHTS_DIR
 from src.preprocessing import build_pipeline
 
 
+
+
 # Preprocessing conditions to test: (mode, display_label)
 _CONDITIONS: List[Tuple[str, str]] = [
     ("rgb",        "RGB Original"),
@@ -80,7 +82,9 @@ class AblationReporter:
         x_test, y_test, masks, restore_fn, n_epochs,
     ) -> Tuple[Dict, float]:
         import keras
-        from keras.callbacks import EarlyStopping, ModelCheckpoint, ReduceLROnPlateau
+        from keras.callbacks import (
+            Callback, EarlyStopping, ModelCheckpoint, ReduceLROnPlateau,
+        )
         from keras.optimizers import Adam
         from sklearn.metrics import f1_score, roc_auc_score
         import cv2
@@ -88,6 +92,40 @@ class AblationReporter:
         from config import LOSS_PARAMS
         from src.losses import get_loss_function
         from src.models import build_sa_unetv2
+
+        class _ProgressCB(Callback):
+            def __init__(self, total):
+                super().__init__()
+                self._total = total
+                self._t0 = None
+
+            def on_train_begin(self, logs=None):  # noqa: ARG002
+                self._t0 = time.perf_counter()
+                print(f"  Training dimulai — max {self._total} epoch "
+                      f"(EarlyStopping aktif)")
+                print(f"  {'Epoch':>7}  {'Loss':>10}  {'Val Loss':>10}  "
+                      f"{'Val Acc':>9}  {'Elapsed':>9}")
+                print("  " + "─" * 56)
+                import sys; sys.stdout.flush()
+
+            def on_epoch_end(self, epoch, logs=None):
+                logs = logs or {}
+                elapsed  = time.perf_counter() - self._t0
+                loss     = logs.get("loss",         float("nan"))
+                val_loss = logs.get("val_loss",      float("nan"))
+                val_acc  = logs.get("val_accuracy",  float("nan"))
+                print(
+                    f"  {epoch + 1:>4}/{self._total:<3}"
+                    f"  {loss:>10.5f}"
+                    f"  {val_loss:>10.5f}"
+                    f"  {val_acc:>9.4f}"
+                    f"  {elapsed:>7.0f}s",
+                    flush=True,
+                )
+
+            def on_train_end(self, logs=None):  # noqa: ARG002
+                elapsed = time.perf_counter() - self._t0
+                print(f"  Training selesai dalam {elapsed:.0f}s")
 
         weight_path = (
             WEIGHTS_DIR / "ablation" / f"drive_{mode}_{_ABLATION_LOSS_KEY}.weights.h5"
@@ -115,6 +153,7 @@ class AblationReporter:
             epochs=n_epochs,
             batch_size=cfg.batch_size,
             callbacks=[
+                _ProgressCB(n_epochs),
                 ModelCheckpoint(str(weight_path), monitor=cfg.checkpoint_monitor,
                                 save_best_only=True, save_weights_only=True,
                                 mode=ckpt_mode, verbose=0),
@@ -129,8 +168,10 @@ class AblationReporter:
         )
         elapsed = time.perf_counter() - t0
 
+        print("  Menjalankan inferensi pada data test...")
         y_pred_padded = model.predict(x_test, batch_size=cfg.batch_size, verbose=0)
         y_pred = restore_fn(y_pred_padded)
+        print("  Menghitung metrik evaluasi...")
 
         # Aggregate metrics over all test images
         all_prob, all_bin, all_gt = [], [], []
