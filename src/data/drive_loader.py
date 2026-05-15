@@ -81,6 +81,9 @@ class DriveDataLoader:
 
             im    = cv2.resize(im,    (self.cfg.original_w, self.cfg.original_h))
             label = cv2.resize(label, (self.cfg.original_w, self.cfg.original_h))
+            # cv2.resize squeezes (H,W,1) → (H,W); restore channel dim if needed
+            if im.ndim == 2:
+                im = np.expand_dims(im, axis=-1)
             _, label = cv2.threshold(label, 127, 255, cv2.THRESH_BINARY)
 
             x_list.append(im)

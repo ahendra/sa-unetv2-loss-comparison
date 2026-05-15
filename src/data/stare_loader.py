@@ -88,7 +88,10 @@ class StareDataLoader:
             label_bin = np.expand_dims(label_bin, axis=-1)
 
             h, w = im.shape[:2]
-            padded = np.zeros((self.target_h, self.target_w, 3), dtype=np.float32)
+            c = im.shape[2] if im.ndim == 3 else 1
+            if im.ndim == 2:
+                im = np.expand_dims(im, axis=-1)
+            padded = np.zeros((self.target_h, self.target_w, c), dtype=np.float32)
             padded[:h, :w, :] = im
 
             x_list.append(padded)
