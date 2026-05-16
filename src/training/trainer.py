@@ -1,5 +1,6 @@
 import json
 import os
+import random
 import sys
 import time
 from pathlib import Path
@@ -15,8 +16,23 @@ from keras.callbacks import (
 )
 from keras.optimizers import Adam
 
-from config import DriveConfig, StareConfig, RESULTS_DIR, WEIGHTS_DIR
+from config import DriveConfig, StareConfig, RESULTS_DIR, WEIGHTS_DIR, RANDOM_SEED
 from src.models import build_sa_unetv2
+
+
+def set_global_seed(seed: Optional[int] = RANDOM_SEED) -> None:
+    """Fix random seed for Python, NumPy, and TensorFlow.
+
+    Call once before model construction + training to ensure reproducible
+    weight initialisation and data shuffle across all loss function runs.
+    Has no effect when seed is None.
+    """
+    if seed is None:
+        return
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
+    os.environ["PYTHONHASHSEED"] = str(seed)
 
 
 class _ProgressCallback(keras.callbacks.Callback):
@@ -68,6 +84,7 @@ class ModelTrainer:
         x_val: np.ndarray,
         y_val: np.ndarray,
     ) -> keras.Model:
+        set_global_seed()
         weight_path = self._weight_path(loss_name)
         weight_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -83,7 +100,8 @@ class ModelTrainer:
             metrics=['accuracy'],
         )
 
-        print(f"\n  Model: SA-UNetV2 | Loss: {loss_name} | Dataset: {self.cfg.name}")
+        seed_info = f"seed={RANDOM_SEED}" if RANDOM_SEED is not None else "seed=None (non-reproducible)"
+        print(f"\n  Model: SA-UNetV2 | Loss: {loss_name} | Dataset: {self.cfg.name} | {seed_info}")
         print(f"  Train samples: {len(x_train)}  Val samples: {len(x_val)}")
         print(f"  Weights will be saved to: {weight_path}")
 

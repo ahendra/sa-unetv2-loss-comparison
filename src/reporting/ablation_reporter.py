@@ -13,10 +13,12 @@ from src.preprocessing import build_pipeline
 
 
 # Preprocessing conditions to test: (mode, display_label)
+# Only 3-channel modes are included — green/green_clahe change the input layer
+# from (H,W,3) to (H,W,1), which alters the model architecture and introduces
+# a confounding variable separate from preprocessing.
 _CONDITIONS: List[Tuple[str, str]] = [
-    ("rgb",        "RGB Original"),
-    ("green",      "Green Channel"),
-    ("green_clahe","Green + CLAHE"),
+    ("rgb",   "RGB Original"),
+    ("clahe", "RGB + CLAHE"),
 ]
 
 _ABLATION_LOSS_KEY = "bce_mcc"
@@ -25,11 +27,15 @@ _ABLATION_LOSS_KEY = "bce_mcc"
 class AblationReporter:
     """Run preprocessing ablation study for Section 4.2.
 
-    Trains BCE+MCC baseline on DRIVE under three preprocessing conditions:
-    RGB, Green Channel, and Green + CLAHE. Uses the original SA-UNetV2
-    training hyperparameters. Results are saved as JSON + bar chart PNG.
+    Trains BCE+MCC baseline on DRIVE under two 3-channel preprocessing
+    conditions: RGB Original and RGB + CLAHE. Uses the original SA-UNetV2
+    training hyperparameters.
 
-    Single Responsibility: preprocessing ablation only (DRIVE + BCE+MCC).
+    Outputs saved to output_dir:
+      - preprocessing_ablation.json          — raw metrics
+      - preprocessing_ablation_table.txt     — formatted text table
+      - preprocessing_ablation.png           — bar chart
+      - preprocessing_sample_comparison.png  — visual before/after comparison
     """
 
     def __init__(self, output_dir: Path):
@@ -73,6 +79,7 @@ class AblationReporter:
 
         self._save(results)
         self._plot(results)
+        self._plot_sample_images()
         return results
 
     # ── Private ──────────────────────────────────────────────────────────────
@@ -171,39 +178,59 @@ class AblationReporter:
         print("  Menjalankan inferensi pada data test...")
         y_pred_padded = model.predict(x_test, batch_size=cfg.batch_size, verbose=0)
         y_pred = restore_fn(y_pred_padded)
-        print("  Menghitung metrik evaluasi...")
-
-        # Aggregate metrics over all test images
-        all_prob, all_bin, all_gt = [], [], []
-        for pred, gt in zip(y_pred, y_test):
-            prob = pred.squeeze().astype(np.float32)
-            gt_2d = gt.squeeze()
-            _, binary = cv2.threshold(prob, 0.5, 1.0, cv2.THRESH_BINARY)
-
-            if masks is not None:
-                pass  # simplified: use full image for ablation
-
-            all_prob.extend(prob.ravel().tolist())
-            all_bin.extend(binary.ravel().astype(np.uint8).tolist())
-            all_gt.extend((gt_2d > 0.5).astype(np.uint8).ravel().tolist())
-
-        all_prob = np.array(all_prob)
-        all_bin  = np.array(all_bin, dtype=np.uint8)
-        all_gt   = np.array(all_gt,  dtype=np.uint8)
+        print("  Menghitung metrik evaluasi (per-gambar + FOV mask)...")
 
         from sklearn.metrics import (
             accuracy_score, confusion_matrix, f1_score,
-            jaccard_score, matthews_corrcoef, roc_auc_score,
+            jaccard_score, matthews_corrcoef, recall_score, roc_auc_score,
         )
-        tn, fp, fn, tp = confusion_matrix(all_gt, all_bin).ravel()
+
+        # Per-image metrics then average — same method as ModelEvaluator
+        per_image: list = []
+        for i, (pred, gt) in enumerate(zip(y_pred, y_test)):
+            prob    = pred.squeeze().astype(np.float32)          # (H, W)
+            gt_2d   = gt.squeeze()                               # (H, W)
+            _, binary = cv2.threshold(prob, 0.5, 1.0, cv2.THRESH_BINARY)
+            pred_bin  = binary.astype(np.uint8)
+
+            prob_flat = prob.ravel()
+            bin_flat  = pred_bin.ravel()
+            gt_flat   = (gt_2d > 0.5).astype(np.uint8).ravel()
+
+            # Apply FOV mask — same logic as ModelEvaluator
+            if masks is not None and i < len(masks):
+                mask_flat = masks[i].ravel() if masks[i].ndim > 1 else masks[i]
+                idx = np.where(mask_flat > 0.5)[0]
+                if len(idx) == 0:
+                    continue
+                prob_flat = prob_flat[idx]
+                bin_flat  = bin_flat[idx]
+                gt_flat   = gt_flat[idx]
+
+            try:
+                tn, fp, *_ = confusion_matrix(gt_flat, bin_flat).ravel()
+                per_image.append({
+                    "accuracy":    float(accuracy_score(gt_flat, bin_flat)),
+                    "sensitivity": float(recall_score(gt_flat, bin_flat,
+                                                      zero_division=0)),
+                    "specificity": float(tn / (tn + fp + 1e-8)),
+                    "f1":          float(f1_score(gt_flat, bin_flat,
+                                                  zero_division=0)),
+                    "jaccard":     float(jaccard_score(gt_flat, bin_flat,
+                                                       zero_division=0)),
+                    "mcc":         float(matthews_corrcoef(gt_flat, bin_flat)),
+                    "auc":         float(roc_auc_score(gt_flat, prob_flat)),
+                })
+            except Exception as exc:
+                print(f"  [WARN] Metrik gambar {i + 1} dilewati: {exc}")
+
+        if not per_image:
+            raise RuntimeError("Tidak ada metrik yang berhasil dihitung.")
+
+        # Average across images (same as ModelEvaluator)
         metrics = {
-            "accuracy":    round(float(accuracy_score(all_gt, all_bin)) * 100, 4),
-            "sensitivity": round(float(tp / (tp + fn + 1e-8)) * 100, 4),
-            "specificity": round(float(tn / (tn + fp + 1e-8)) * 100, 4),
-            "f1":          round(float(f1_score(all_gt, all_bin, zero_division=0)) * 100, 4),
-            "jaccard":     round(float(jaccard_score(all_gt, all_bin, zero_division=0)) * 100, 4),
-            "mcc":         round(float(matthews_corrcoef(all_gt, all_bin)) * 100, 4),
-            "auc":         round(float(roc_auc_score(all_gt, all_prob)) * 100, 4),
+            k: round(float(np.mean([m[k] for m in per_image])) * 100, 4)
+            for k in per_image[0]
         }
 
         del model
@@ -299,24 +326,156 @@ class AblationReporter:
 
         metric_keys   = ["accuracy", "sensitivity", "specificity", "f1", "jaccard", "auc"]
         metric_labels = ["Accuracy", "Sensitivity", "Specificity", "F1", "Jaccard", "AUC"]
-        conditions    = [v["label"] for v in results.values()]
-        x = np.arange(len(metric_keys))
-        width = 0.25
+        n_cond = len(results)
+        x      = np.arange(len(metric_keys))
+        width  = 0.7 / max(n_cond, 1)
+        colors = plt.cm.tab10(np.linspace(0, 1, n_cond))
 
-        fig, ax = plt.subplots(figsize=(12, 6))
+        # Dynamic y-axis range — zoom in so small differences are visible
+        all_vals = [entry["metrics"].get(m, 0) for entry in results.values() for m in metric_keys]
+        v_min = min(all_vals) if all_vals else 0.0
+        v_max = max(all_vals) if all_vals else 100.0
+        span  = max(v_max - v_min, 1.0)
+        y_min = max(0.0,   v_min - max(2.0, span * 0.30))
+        y_max = min(100.0, v_max + max(1.0, span * 0.15))
+
+        fig, ax = plt.subplots(figsize=(12, 7))
         for i, (mode, entry) in enumerate(results.items()):
-            vals = [entry["metrics"].get(m, 0) for m in metric_keys]
-            ax.bar(x + i * width, vals, width, label=entry["label"], alpha=0.85)
+            vals   = [entry["metrics"].get(m, 0) for m in metric_keys]
+            offset = (i - n_cond / 2 + 0.5) * width
+            bars   = ax.bar(x + offset, vals, width, label=entry["label"],
+                            color=colors[i], alpha=0.85, edgecolor="white")
+            label_offset = (y_max - y_min) * 0.008
+            for bar in bars:
+                h = bar.get_height()
+                if h > y_min:
+                    ax.text(
+                        bar.get_x() + bar.get_width() / 2,
+                        h + label_offset,
+                        f"{h:.2f}",
+                        ha="center", va="bottom", fontsize=7, rotation=90,
+                    )
 
-        ax.set_xticks(x + width)
-        ax.set_xticklabels(metric_labels)
-        ax.set_ylabel("Score (%)")
-        ax.set_title("Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)")
-        ax.legend()
+        ax.set_xticks(x)
+        ax.set_xticklabels(metric_labels, fontsize=11)
+        ax.set_ylabel("Score (%)", fontsize=11)
+        ax.set_title("Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)",
+                     fontsize=12, fontweight="bold")
+        ax.legend(fontsize=10)
         ax.grid(axis="y", alpha=0.3)
-        ax.set_ylim(0, 105)
+        ax.set_ylim(y_min, y_max)
 
         path = self._out_dir / "preprocessing_ablation.png"
         fig.savefig(str(path), dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Grafik tersimpan: {path}")
+
+    def _plot_sample_images(self, n_samples: int = 3, crop_size: int = 200) -> None:
+        """Save side-by-side visual comparison of RGB Original vs RGB + CLAHE.
+
+        Generates a figure with n_samples rows × 4 columns:
+          Col 0: Full image — RGB Original  (red box = crop area)
+          Col 1: Full image — RGB + CLAHE   (red box = crop area)
+          Col 2: Zoomed crop — RGB Original
+          Col 3: Zoomed crop — RGB + CLAHE
+
+        Saved as preprocessing_sample_comparison.png alongside other outputs.
+        """
+        import os
+
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as patches
+            from PIL import Image
+        except ImportError:
+            print("  [WARN] matplotlib/PIL tidak terinstall, skip sample images.")
+            return
+
+        cfg = DriveConfig()
+        pipeline_rgb   = build_pipeline("rgb",   cfg.clahe_clip_limit, cfg.clahe_tile_grid)
+        pipeline_clahe = build_pipeline("clahe", cfg.clahe_clip_limit, cfg.clahe_tile_grid)
+
+        test_dir = cfg.test_images
+        if not os.path.isdir(test_dir):
+            print(f"  [WARN] Test dir tidak ditemukan: {test_dir}, skip sample images.")
+            return
+
+        files = sorted(
+            f for f in os.listdir(test_dir)
+            if not f.startswith('.') and os.path.isfile(os.path.join(test_dir, f))
+        )[:n_samples]
+
+        if not files:
+            print("  [WARN] Tidak ada gambar test ditemukan, skip sample images.")
+            return
+
+        print(f"\n  Membuat perbandingan visual preprocessing ({n_samples} sampel)...")
+
+        fig, axes = plt.subplots(
+            n_samples, 4,
+            figsize=(16, n_samples * 4.2),
+            gridspec_kw={"wspace": 0.05, "hspace": 0.15},
+        )
+        if n_samples == 1:
+            axes = axes[np.newaxis, :]
+
+        col_titles = [
+            "RGB Original",
+            "RGB + CLAHE",
+            "Detail: RGB Original",
+            "Detail: RGB + CLAHE",
+        ]
+        for j, title in enumerate(col_titles):
+            axes[0, j].set_title(title, fontsize=11, fontweight="bold", pad=8)
+
+        r = crop_size // 2
+
+        for i, fname in enumerate(files):
+            img_arr = np.array(
+                Image.open(os.path.join(test_dir, fname)).convert("RGB")
+            )
+            rgb_out   = pipeline_rgb.apply(img_arr.copy())
+            clahe_out = pipeline_clahe.apply(img_arr.copy())
+
+            # Crop center — always inside the retinal circle
+            h, w = img_arr.shape[:2]
+            cy = max(r, min(h - r, h // 2))
+            cx = max(r, min(w - r, w // 2))
+            rgb_crop   = rgb_out  [cy - r: cy + r, cx - r: cx + r]
+            clahe_crop = clahe_out[cy - r: cy + r, cx - r: cx + r]
+
+            # Full images with red crop-area indicator
+            for j, img in enumerate([rgb_out, clahe_out]):
+                axes[i, j].imshow(img)
+                axes[i, j].axis("off")
+                rect = patches.Rectangle(
+                    (cx - r, cy - r), crop_size, crop_size,
+                    linewidth=2, edgecolor="red", facecolor="none",
+                )
+                axes[i, j].add_patch(rect)
+
+            # Zoomed crops
+            axes[i, 2].imshow(rgb_crop)
+            axes[i, 2].axis("off")
+            axes[i, 3].imshow(clahe_crop)
+            axes[i, 3].axis("off")
+
+            # Row label (image filename)
+            axes[i, 0].set_ylabel(
+                os.path.splitext(fname)[0],
+                fontsize=9, rotation=0, labelpad=58, va="center",
+            )
+
+        fig.suptitle(
+            "Perbandingan Preprocessing: RGB Original vs RGB + CLAHE  —  DRIVE test set\n"
+            "Kotak merah = area yang diperbesar (200 × 200 px, pusat retina)",
+            fontsize=12, y=1.01,
+        )
+
+        self._out_dir.mkdir(parents=True, exist_ok=True)
+        path = self._out_dir / "preprocessing_sample_comparison.png"
+        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Perbandingan sampel tersimpan: {path}")

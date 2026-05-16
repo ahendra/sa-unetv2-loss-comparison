@@ -3,7 +3,12 @@ from pathlib import Path
 from typing import Tuple
 
 # Valid preprocessing modes — used by build_pipeline() factory
-PREPROCESSING_MODES = ("rgb", "green", "green_clahe")
+PREPROCESSING_MODES = ("rgb", "clahe", "green", "green_clahe")
+
+# Global random seed — set the same value before every training run so that
+# weight initialisation and data shuffle are identical across all loss functions.
+# Change to None to disable fixed seeding (non-reproducible).
+RANDOM_SEED: int = 42
 
 
 BASE_DIR = Path(__file__).parent
@@ -79,6 +84,7 @@ class DriveConfig:
 
     # ── Preprocessing ─────────────────────────────────────────────────────────
     # "rgb"         → original pipeline, no change (reproduces SA-UNetV2 paper)
+    # "clahe"       → CLAHE per-channel RGB, keep 3-channel output (input channels: 3)
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
     preprocessing_mode: str  = "rgb"
@@ -128,6 +134,7 @@ class StareConfig:
 
     # ── Preprocessing ─────────────────────────────────────────────────────────
     # "rgb"         → original pipeline, no change (reproduces SA-UNetV2 paper)
+    # "clahe"       → CLAHE per-channel RGB, keep 3-channel output (input channels: 3)
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
     preprocessing_mode: str  = "rgb"
@@ -207,7 +214,7 @@ LOSS_PARAMS = {
 #     "dice_ssim": {
 #         "lambda_dice": 0.589607963945301,
 #         "lambda_ssim": 0.41039204,
-#         "smooth": 0.01231826460645177,        
+#         "smooth": 0.01231826460645177,
 #     },
 #     # Ref: "Retinal vascular segmentation network based on dual-scale
 #     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
@@ -239,7 +246,7 @@ LOSS_PARAMS = {
 #     "dice_ssim": {
 #         "lambda_dice": 0.6542783048914624,
 #         "lambda_ssim": 0.3457217,
-#         "smooth": 0.13929185486422527,    
+#         "smooth": 0.13929185486422527,
 #     },
 #     # Ref: "Retinal vascular segmentation network based on dual-scale
 #     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)

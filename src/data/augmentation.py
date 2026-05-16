@@ -10,6 +10,8 @@ import numpy as np
 from PIL import Image, ImageEnhance, ImageFile
 from tqdm import tqdm
 
+from config import RANDOM_SEED
+
 ImageFile.LOAD_TRUNCATED_IMAGES = True
 logger = logging.getLogger(__name__)
 
@@ -143,6 +145,10 @@ class RetinalAugmentationRunner:
         aug_base_dir    : output base (creates train/ and validate/ inside)
         label_suffix_fn : callable(img_fname) -> label_fname
         """
+
+        if RANDOM_SEED is not None:
+            random.seed(RANDOM_SEED)
+            np.random.seed(RANDOM_SEED)
 
         aug_base  = Path(aug_base_dir)
         pool_base = aug_base / "_pool"

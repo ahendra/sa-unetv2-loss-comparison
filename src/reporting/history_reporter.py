@@ -62,6 +62,14 @@ class HistoryReporter:
             ax.axvline(best_epoch, color="gray", ls="--", lw=1.2,
                        label=f"Best epoch: {best_epoch} (val_loss={min(val_loss):.5f})")
 
+        # Zoom y-axis to the actual loss range (exclude initial spike if extreme)
+        all_vals = [v for v in train_loss + val_loss if v == v]
+        if all_vals:
+            v_min = min(all_vals)
+            v_max = max(all_vals)
+            span  = max(v_max - v_min, 1e-4)
+            ax.set_ylim(max(0.0, v_min - span * 0.08), v_max + span * 0.08)
+
         ax.set_title(f"Training History — {loss_label} ({self._cfg.name})")
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")

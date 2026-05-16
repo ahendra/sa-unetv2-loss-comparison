@@ -111,7 +111,7 @@ def cldice_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
 
 
 def dice_ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
-    """Dice + SSIM."""
+    """Dice + SSIM — experimental hybrid loss."""
     p = LOSS_PARAMS["dice_ssim"]
     return (p["lambda_dice"] * _dice(y_true, y_pred, smooth=p["smooth"])
             + p["lambda_ssim"] * _ssim(y_true, y_pred))
