@@ -92,8 +92,6 @@ SEARCH_SPACES = {
     #   "alpha is a per-dataset tunable hyperparameter." Paper juga menyatakan
     #   "increasing alpha generally improves the clDice measure."
     #   Range [0.3, 0.7] mencakup nilai default dan variasi di sekitarnya.
-    #   smooth TIDAK di-tune karena Shit et al. [2] menghardcode smooth=1.0
-    #   langsung di dalam fungsi loss (bukan parameter konfigurasi).
     #
     # iters ∈ [5, 30]:
     #   Shit et al. [2] menggunakan iter_=10 untuk eksperimen 2D (Table 4).
@@ -101,10 +99,15 @@ SEARCH_SPACES = {
     #   menunjukkan konvergensi sekitar k=20-30 untuk gambar 2D; perbedaan
     #   marginal di atas k=30. Range [5, 30] mencakup nilai eksperimental
     #   untuk retinal vessel segmentation 2D.
+    #
+    # smooth ∈ [1e-7, 1.0] (log scale):
+    #   Shit et al. [2] menghardcode smooth=1.0, namun Bertels et al. [4]
+    #   menganalisis epsilon dalam range [1e-7, 1.0] secara sistematis.
+    #   Di-tune untuk menemukan nilai optimal per dataset.
     "cldice": {
-        "alpha": ("float", 0.3, 0.7),
-        "iters": ("int",   5,   30),
-        # smooth = 1.0 fixed (Shit et al. [2], hardcoded dalam original repo)
+        "alpha":  ("float",     0.3,  0.7),
+        "iters":  ("int",       5,    30),
+        "smooth": ("float_log", 1e-7, 1.0),
     },
 
     # ── Dice + SSIM ──────────────────────────────────────────────────────────
@@ -152,8 +155,6 @@ def _suggest(trial, loss_key: str) -> dict:
     # Derived / constrained params
     if loss_key == "bce_mcc":
         params["lambda_mcc"] = round(1.0 - params["lambda_bce"], 8)
-    elif loss_key == "cldice":
-        params["smooth"] = 1.0  # Fixed per Shit et al. (2021) CVPR, hardcoded in original repo
     elif loss_key == "dice_ssim":
         params["lambda_ssim"] = round(1.0 - params["lambda_dice"], 8)
     elif loss_key == "bce_ssim":
@@ -292,10 +293,10 @@ class LossTuner:
     # ── Progress callback ─────────────────────────────────────────────────────
 
     def _on_trial_end(self, study, trial) -> None:
-        val  = f"{trial.value:.4f}" if trial.value is not None else "pruned"
+        val  = f"{trial.value:.6f}" if trial.value is not None else "pruned"
         best = study.best_value if study.best_value is not None else 0.0
         print(
-            f"  {trial.number + 1:>4}  F1={val}  Best={best:.4f}  {trial.params}",
+            f"  {trial.number + 1:>4}  F1={val}  Best={best:.6f}  {trial.params}",
             flush=True,
         )
 
@@ -349,8 +350,6 @@ class LossTuner:
         best_params = dict(study.best_trial.params)
         if self.loss_key == "bce_mcc":
             best_params["lambda_mcc"] = round(1.0 - best_params["lambda_bce"], 8)
-        elif self.loss_key == "cldice":
-            best_params["smooth"] = 1.0  # Fixed per Shit et al. (2021) CVPR
         elif self.loss_key == "dice_ssim":
             best_params["lambda_ssim"] = round(1.0 - best_params["lambda_dice"], 8)
         elif self.loss_key == "bce_ssim":
@@ -359,7 +358,7 @@ class LossTuner:
         result = {
             "loss_key"          : self.loss_key,
             "dataset"           : self.cfg.name,
-            "best_f1"           : round(study.best_value, 6),
+            "best_f1"           : study.best_value,
             "best_params"       : best_params,
             "n_trials"          : len(study.trials),
             "n_epochs_per_trial": self.n_epochs,
@@ -368,7 +367,7 @@ class LossTuner:
             "all_trials": [
                 {
                     "number": t.number,
-                    "f1"    : round(t.value, 6) if t.value is not None else None,
+                    "f1"    : t.value,
                     "params": t.params,
                     "state" : t.state.name,
                 }
@@ -415,7 +414,7 @@ class LossTuner:
         fig = plt.figure(figsize=(14, 4 * total_rows))
         fig.suptitle(
             f"Hyperparameter Tuning — {self.loss_key.upper()} ({self.cfg.name})\n"
-            f"Best F1: {study.best_value:.4f}  |  Trials: {len(trials)}",
+            f"Best F1: {study.best_value:.6f}  |  Trials: {len(trials)}",
             fontsize=12, fontweight="bold",
         )
         gs = gridspec.GridSpec(total_rows, n_cols,
@@ -427,7 +426,7 @@ class LossTuner:
                     label="Trial F1", zorder=3)
         ax0.plot(trial_nums, best_curve, "r-", lw=2, label="Best so far")
         ax0.axhline(study.best_value, color="darkred", ls="--",
-                    label=f"Best: {study.best_value:.4f}")
+                    label=f"Best: {study.best_value:.6f}")
         ax0.set_xlabel("Trial"); ax0.set_ylabel("F1 Score")
         ax0.set_title("Optimization History")
         ax0.legend(fontsize=9); ax0.grid(alpha=0.3)

@@ -209,7 +209,7 @@ class ModelEvaluator:
         path.parent.mkdir(parents=True, exist_ok=True)
         _skip = {"inference_time_sec", "num_images"}
         pct = {
-            k: (round(v * 100, 4) if "betti" not in k and k not in _skip else v)
+            k: (round(v * 100, 2) if "betti" not in k and k not in _skip else v)
             for k, v in metrics.items()
         }
         with open(path, 'w') as f:

@@ -362,7 +362,7 @@ def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int,
             print(f"\n  Ditemukan sesi tuning sebelumnya untuk '{loss_key}':")
             print(f"    Trials selesai : {n_done}")
             if best is not None:
-                print(f"    Best F1 saat ini: {best:.4f}")
+                print(f"    Best F1 saat ini: {best:.6f}")
 
             if auto_resume:
                 if n_done >= n_trials:

@@ -75,7 +75,7 @@ class AblationReporter:
                 x_test, y_test, masks, loader.restore_predictions, n_epochs,
             )
             results[mode] = {"label": label, "metrics": metrics, "elapsed_sec": elapsed}
-            print(f"  F1={metrics['f1']:.4f}  Sensitivity={metrics['sensitivity']:.4f}")
+            print(f"  F1={metrics['f1']:.2f}  Sensitivity={metrics['sensitivity']:.2f}")
 
         self._save(results)
         self._plot(results)
@@ -229,7 +229,7 @@ class AblationReporter:
 
         # Average across images (same as ModelEvaluator)
         metrics = {
-            k: round(float(np.mean([m[k] for m in per_image])) * 100, 4)
+            k: round(float(np.mean([m[k] for m in per_image])) * 100, 2)
             for k in per_image[0]
         }
 

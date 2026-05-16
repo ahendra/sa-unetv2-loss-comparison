@@ -114,7 +114,7 @@ class ComparisonReporter:
         ax.set_xticklabels([m.upper() for m in metrics], fontsize=10)
         ax.set_ylim(r_min, r_max)
         ax.set_yticks(ticks)
-        ax.set_yticklabels([f"{t * 100:.1f}%" for t in ticks], fontsize=7)
+        ax.set_yticklabels([f"{t * 100:.2f}%" for t in ticks], fontsize=7)
         ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), fontsize=9)
         ax.set_title(
             f"Loss Function Comparison — {dataset.upper()}\n(6 primary metrics)",
@@ -317,7 +317,7 @@ class ComparisonReporter:
                     "loss_key":   k,
                     "loss_label": LOSS_FUNCTIONS[k],
                     "category":   _LOSS_CATEGORIES.get(k, ""),
-                    "value":      round(v, 4) if v == v else None,
+                    "value":      round(v, 2) if v == v else None,
                 }
                 for i, (k, v) in enumerate(items)
             ]
