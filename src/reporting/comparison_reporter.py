@@ -53,9 +53,10 @@ class ComparisonReporter:
 
         self._out_dir.mkdir(parents=True, exist_ok=True)
         paths: Dict[str, Path] = {}
-        paths["radar"]   = self._plot_radar(results, dataset)
-        paths["bar"]     = self._plot_bar(results, dataset)
-        paths["ranking"] = self._save_ranking(results, dataset)
+        paths["radar"]     = self._plot_radar(results, dataset)
+        paths["bar"]       = self._plot_bar(results, dataset)
+        paths["confusion"] = self._plot_confusion_matrices(results, dataset)
+        paths["ranking"]   = self._save_ranking(results, dataset)
         return paths
 
     # ── Loaders ──────────────────────────────────────────────────────────────
@@ -185,6 +186,116 @@ class ComparisonReporter:
         fig.savefig(str(path), dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  Bar chart: {path}")
+        return path
+
+    # ── Confusion matrix grid ─────────────────────────────────────────────────
+
+    def _plot_confusion_matrices(self, results: Dict, dataset: str) -> Optional[Path]:
+        """Plot one normalized 2×2 confusion matrix per loss function.
+
+        Values are derived from averaged Sensitivity (TPR) and Specificity (TNR)
+        stored in the results JSON:
+          TPR = sensitivity / 100      FNR = 1 − TPR
+          TNR = specificity / 100      FPR = 1 − TNR
+
+        Row = Actual class, Col = Predicted class:
+          [TN  FP]   actual = Background
+          [FN  TP]   actual = Vessel
+
+        Cell colours match the visualization peta kesalahan:
+          TP = hijau, TN = hijau muda, FP = merah, FN = biru
+        """
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("  [WARN] matplotlib tidak terinstall, skip confusion matrix.")
+            return None
+
+        loss_keys   = [k for k in LOSS_FUNCTIONS if k in results]
+        loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
+        n = len(loss_keys)
+
+        n_cols = 3
+        n_rows = (n + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(n_cols * 4.2, n_rows * 4.0),
+            gridspec_kw={"hspace": 0.55, "wspace": 0.35},
+        )
+        axes_flat = np.array(axes).flatten()
+
+        # Base colours (RGB 0–1) — match peta kesalahan in visualization_reporter
+        _BASE = {
+            "TN": np.array([0.55, 0.88, 0.55]),   # hijau muda
+            "FP": np.array([0.92, 0.45, 0.45]),   # merah
+            "FN": np.array([0.45, 0.45, 0.92]),   # biru
+            "TP": np.array([0.10, 0.68, 0.10]),   # hijau tua
+        }
+        _CELL_LABEL = [["TN", "FP"], ["FN", "TP"]]
+
+        for idx, (loss_key, label) in enumerate(zip(loss_keys, loss_labels)):
+            ax = axes_flat[idx]
+            m  = results[loss_key]
+
+            tpr = m.get("sensitivity", 0) / 100.0
+            tnr = m.get("specificity", 0) / 100.0
+            fnr = 1.0 - tpr
+            fpr = 1.0 - tnr
+
+            # vals[row][col]: rows = Actual, cols = Predicted
+            vals = [[tnr, fpr],   # actual=Background: TN | FP
+                    [fnr, tpr]]   # actual=Vessel:      FN | TP
+
+            # Build RGB image — white blended toward base colour by value intensity
+            rgb = np.ones((2, 2, 3), dtype=np.float64)
+            for r in range(2):
+                for c in range(2):
+                    v = vals[r][c]
+                    base = _BASE[_CELL_LABEL[r][c]]
+                    rgb[r, c] = 1.0 - v * (1.0 - base)   # lerp white → base
+
+            ax.imshow(rgb, interpolation="nearest", aspect="auto",
+                      extent=[-0.5, 1.5, 1.5, -0.5])
+
+            # White grid lines between cells
+            ax.axhline(0.5, color="white", lw=2.5)
+            ax.axvline(0.5, color="white", lw=2.5)
+
+            # Cell text: label + percentage
+            for r in range(2):
+                for c in range(2):
+                    v        = vals[r][c]
+                    cell_lbl = _CELL_LABEL[r][c]
+                    txt_col  = "white" if v > 0.50 else "black"
+                    ax.text(c, r,
+                            f"{cell_lbl}\n{v * 100:.2f}%",
+                            ha="center", va="center",
+                            fontsize=11, fontweight="bold",
+                            color=txt_col)
+
+            ax.set_xticks([0, 1])
+            ax.set_xticklabels(["Pred.\nBackground", "Pred.\nVessel"], fontsize=8)
+            ax.set_yticks([0, 1])
+            ax.set_yticklabels(["Actual\nBackground", "Actual\nVessel"], fontsize=8)
+            ax.tick_params(length=0)
+            ax.set_title(label, fontsize=9, fontweight="bold", pad=8)
+
+        # Hide unused subplot panels
+        for idx in range(n, len(axes_flat)):
+            axes_flat[idx].axis("off")
+
+        fig.suptitle(
+            f"Confusion Matrix (Normalized Rate) — {dataset.upper()}\n"
+            "Nilai diturunkan dari rata-rata Sensitivity & Specificity per gambar test",
+            fontsize=11, fontweight="bold",
+        )
+
+        path = self._out_dir / f"confusion_matrix_{dataset}.png"
+        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        plt.close(fig)
+        print(f"  Confusion matrix: {path}")
         return path
 
     # ── Ranking table ─────────────────────────────────────────────────────────
