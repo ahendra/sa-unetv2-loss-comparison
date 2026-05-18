@@ -21,18 +21,24 @@ from src.models import build_sa_unetv2
 
 
 def set_global_seed(seed: Optional[int] = RANDOM_SEED) -> None:
-    """Fix random seed for Python, NumPy, and TensorFlow.
+    """Fix random seed across all RNG sources used during training.
 
-    Call once before model construction + training to ensure reproducible
-    weight initialisation and data shuffle across all loss function runs.
-    Has no effect when seed is None.
+    Must be called before model construction. Covers:
+      - Python built-in random
+      - NumPy random
+      - TensorFlow global RNG (graph-level ops, weight init, dropout)
+      - Keras backend internal state (Keras 3 comprehensive seeder)
+
+    GPU determinism (TF_DETERMINISTIC_OPS / TF_CUDNN_DETERMINISTIC) is
+    enforced via environment variables in main.py before TF is imported —
+    those cannot be set here because TF is already loaded at this point.
     """
     if seed is None:
         return
     random.seed(seed)
     np.random.seed(seed)
     tf.random.set_seed(seed)
-    os.environ["PYTHONHASHSEED"] = str(seed)
+    keras.utils.set_random_seed(seed)
 
 
 class _ProgressCallback(keras.callbacks.Callback):

@@ -366,44 +366,67 @@ class AblationReporter:
 
         metric_keys   = ["accuracy", "sensitivity", "specificity", "f1", "jaccard", "auc"]
         metric_labels = ["Accuracy", "Sensitivity", "Specificity", "F1", "Jaccard", "AUC"]
-        n_cond = len(results)
-        x      = np.arange(len(metric_keys))
-        width  = 0.7 / max(n_cond, 1)
-        colors = plt.cm.tab10(np.linspace(0, 1, n_cond))
+        n_cond      = len(results)
+        cond_items  = list(results.items())
+        colors      = plt.cm.tab10(np.linspace(0, 1, n_cond))
 
-        # Dynamic y-axis range — zoom in so small differences are visible
-        all_vals = [entry["metrics"].get(m, 0) for entry in results.values() for m in metric_keys]
-        v_min = min(all_vals) if all_vals else 0.0
-        v_max = max(all_vals) if all_vals else 100.0
-        span  = max(v_max - v_min, 1.0)
-        y_min = max(0.0,   v_min - max(2.0, span * 0.30))
-        y_max = min(100.0, v_max + max(1.0, span * 0.15))
+        # One subplot per metric — each gets its own zoomed y-axis so even 0.1%
+        # differences between conditions are clearly visible.
+        n_cols = 3
+        n_rows = (len(metric_keys) + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(14, 4.5 * n_rows),
+            gridspec_kw={"hspace": 0.55, "wspace": 0.35},
+        )
+        fig.suptitle(
+            "Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)",
+            fontsize=12, fontweight="bold",
+        )
+        axes_flat = np.array(axes).flatten()
 
-        fig, ax = plt.subplots(figsize=(12, 7))
-        for i, (mode, entry) in enumerate(results.items()):
-            vals   = [entry["metrics"].get(m, 0) for m in metric_keys]
-            offset = (i - n_cond / 2 + 0.5) * width
-            bars   = ax.bar(x + offset, vals, width, label=entry["label"],
-                            color=colors[i], alpha=0.85, edgecolor="white")
-            label_offset = (y_max - y_min) * 0.008
-            for bar in bars:
-                h = bar.get_height()
-                if h > y_min:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        h + label_offset,
-                        f"{h:.2f}",
-                        ha="center", va="bottom", fontsize=7, rotation=90,
-                    )
+        for m_idx, (mkey, mlabel) in enumerate(zip(metric_keys, metric_labels)):
+            ax   = axes_flat[m_idx]
+            vals = [entry["metrics"].get(mkey, 0) for _, entry in cond_items]
 
-        ax.set_xticks(x)
-        ax.set_xticklabels(metric_labels, fontsize=11)
-        ax.set_ylabel("Score (%)", fontsize=11)
-        ax.set_title("Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)",
-                     fontsize=12, fontweight="bold")
-        ax.legend(fontsize=10)
-        ax.grid(axis="y", alpha=0.3)
-        ax.set_ylim(y_min, y_max)
+            # Per-metric y-axis zoom
+            v_min = min(vals)
+            v_max = max(vals)
+            span  = max(v_max - v_min, 0.05)
+            y_min = max(0.0,   v_min - max(0.5, span * 0.8))
+            y_max = min(100.0, v_max + max(0.5, span * 1.5))
+            label_offset = (y_max - y_min) * 0.025
+
+            for i, ((_, entry), color) in enumerate(zip(cond_items, colors)):
+                v = entry["metrics"].get(mkey, 0)
+                ax.bar(i, v, width=0.5, color=color, alpha=0.85,
+                       edgecolor="white", label=entry["label"])
+                ax.text(i, v + label_offset, f"{v:.2f}",
+                        ha="center", va="bottom", fontsize=9, fontweight="bold")
+
+            ax.set_xticks(range(n_cond))
+            ax.set_xticklabels(
+                [entry["label"] for _, entry in cond_items],
+                fontsize=9,
+            )
+            ax.set_xlim(-0.6, n_cond - 0.4)
+            ax.set_ylabel("Score (%)", fontsize=9)
+            ax.set_title(mlabel, fontsize=10, fontweight="bold")
+            ax.set_ylim(y_min, y_max)
+            ax.grid(axis="y", alpha=0.3)
+
+        # Hide any unused subplot panels
+        for idx in range(len(metric_keys), len(axes_flat)):
+            axes_flat[idx].axis("off")
+
+        # Single figure-level legend placed below all subplots
+        handles, labels = axes_flat[0].get_legend_handles_labels()
+        fig.legend(
+            handles, labels,
+            loc="lower center", ncol=n_cond,
+            bbox_to_anchor=(0.5, -0.03),
+            fontsize=10, framealpha=0.9,
+        )
 
         path = self._out_dir / "preprocessing_ablation.png"
         fig.savefig(str(path), dpi=150, bbox_inches="tight")

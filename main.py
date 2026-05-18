@@ -10,6 +10,22 @@ Usage:
 import os
 import sys
 
+# ── Determinism & reproducibility ─────────────────────────────────────────────
+# These MUST be set before TensorFlow / Keras is imported.
+# TF_DETERMINISTIC_OPS  : forces TF to use deterministic GPU kernels (slower
+#                         but reproducible). Without this, GPU parallelism
+#                         causes different floating-point rounding each run.
+# TF_CUDNN_DETERMINISTIC: forces cuDNN to pick deterministic convolution
+#                         algorithms instead of the fastest non-deterministic one.
+# PYTHONHASHSEED        : must be set before the interpreter starts to fully
+#                         suppress Python's random hash salting; setting it here
+#                         (at process entry, before any imports) is the earliest
+#                         reliable point short of a wrapper script.
+_SEED = "42"
+os.environ.setdefault("TF_DETERMINISTIC_OPS",   "1")
+os.environ.setdefault("TF_CUDNN_DETERMINISTIC",  "1")
+os.environ.setdefault("PYTHONHASHSEED",           _SEED)
+
 # Suppress TF/CUDA noise before importing TensorFlow
 os.environ.setdefault("TF_CPP_MIN_LOG_LEVEL", "2")
 os.environ.setdefault("PYTHONWARNINGS", "ignore::DeprecationWarning")

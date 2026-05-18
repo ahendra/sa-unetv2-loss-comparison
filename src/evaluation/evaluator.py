@@ -84,6 +84,11 @@ def _compute_metrics(
         "cldice":      _cldice(y_true_2d, y_pred_2d),
         "betti0_error": abs(b0_pred - b0_true),
         "betti1_error": abs(b1_pred - b1_true),
+        # Raw pixel counts for confusion matrix (summed across images later)
+        "tp_count": int(tp),
+        "tn_count": int(tn),
+        "fp_count": int(fp),
+        "fn_count": int(fn),
     }
 
 
@@ -180,10 +185,16 @@ class ModelEvaluator:
             raise RuntimeError(
                 "No valid metrics computed. Check dataset paths and labels.")
 
+        _count_keys = {"tp_count", "tn_count", "fp_count", "fn_count"}
         avg = {
             key: float(np.mean([m[key] for m in per_image]))
             for key in per_image[0]
+            if key not in _count_keys
         }
+        # Pixel counts are summed (not averaged) across all test images
+        for k in _count_keys:
+            avg[k] = int(sum(m[k] for m in per_image))
+
         avg["inference_time_sec"] = round(elapsed, 4)
         avg["num_images"] = len(per_image)
 
@@ -207,9 +218,11 @@ class ModelEvaluator:
     def _save_results(self, loss_name: str, metrics: Dict) -> None:
         path = self._result_path(loss_name)
         path.parent.mkdir(parents=True, exist_ok=True)
-        _skip = {"inference_time_sec", "num_images"}
+        # Keys stored as-is (not converted to percentage)
+        _raw_keys = {"inference_time_sec", "num_images",
+                     "tp_count", "tn_count", "fp_count", "fn_count"}
         pct = {
-            k: (round(v * 100, 2) if "betti" not in k and k not in _skip else v)
+            k: (round(v * 100, 2) if "betti" not in k and k not in _raw_keys else v)
             for k, v in metrics.items()
         }
         with open(path, 'w') as f:

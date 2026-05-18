@@ -582,7 +582,9 @@ def _run_visualization_report(cfg, trainer: ModelTrainer, out_dir) -> None:
     n_max = len(x_test)
     n     = min(_ask_int(f"Jumlah gambar sampel (max {n_max})", 3, 1, n_max), n_max)
     reporter = VisualizationReporter(cfg, out_dir, n_samples=n)
-    reporter.generate(x_test, y_test, list(range(n)))
+    paths = reporter.generate(x_test, y_test, list(range(n)))
+    if paths:
+        print(f"\n  {len(paths)} file visualisasi tersimpan (1 file per sampel).")
     input("\n  Tekan Enter untuk kembali...")
 
 
@@ -601,9 +603,11 @@ def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
 
     x_test, y_test, masks, _ = _load_test_data(cfg)
     if x_test is not None:
-        VisualizationReporter(cfg, base / "section_4_5_visualization").generate(
-            x_test, y_test, list(range(min(3, len(x_test))))
-        )
+        vis_paths = VisualizationReporter(
+            cfg, base / "section_4_5_visualization"
+        ).generate(x_test, y_test, list(range(min(3, len(x_test)))))
+        if vis_paths:
+            print(f"  {len(vis_paths)} file visualisasi tersimpan.")
 
     ComparisonReporter(base / "section_4_6_comparison").generate_all(cfg.name.lower())
     print(f"\n  Semua reports tersimpan di: {base}")

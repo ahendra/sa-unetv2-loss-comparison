@@ -86,7 +86,7 @@ class ComparisonReporter:
         angles      = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
         angles     += angles[:1]
 
-        fig, ax = plt.subplots(figsize=(8, 8), subplot_kw=dict(polar=True))
+        fig, ax = plt.subplots(figsize=(8, 9), subplot_kw=dict(polar=True))
         colors  = plt.cm.tab10(np.linspace(0, 1, len(LOSS_FUNCTIONS)))
 
         for (loss_key, loss_label), color in zip(LOSS_FUNCTIONS.items(), colors):
@@ -115,10 +115,17 @@ class ComparisonReporter:
         ax.set_ylim(r_min, r_max)
         ax.set_yticks(ticks)
         ax.set_yticklabels([f"{t * 100:.2f}%" for t in ticks], fontsize=7)
-        ax.legend(loc="upper right", bbox_to_anchor=(1.35, 1.15), fontsize=9)
         ax.set_title(
             f"Loss Function Comparison — {dataset.upper()}\n(6 primary metrics)",
             fontsize=11, fontweight="bold", pad=20,
+        )
+        # Legend placed below the polar axes — avoids overlap with spokes/labels
+        handles, labels = ax.get_legend_handles_labels()
+        fig.legend(
+            handles, labels,
+            loc="lower center", ncol=2,
+            bbox_to_anchor=(0.5, 0.01),
+            fontsize=9, framealpha=0.9,
         )
 
         path = self._out_dir / f"radar_chart_{dataset}.png"
@@ -142,45 +149,61 @@ class ComparisonReporter:
         loss_keys     = [k for k in LOSS_FUNCTIONS if k in results]
         loss_labels   = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
         n_losses = len(loss_keys)
-        x        = np.arange(len(metrics))
-        width    = 0.8 / n_losses
         colors   = plt.cm.tab10(np.linspace(0, 1, n_losses))
 
-        # Dynamic y-axis range — zoom in so small differences are visible
-        all_vals = [results[k].get(m, 0) for k in loss_keys for m in metrics]
-        v_min = min(all_vals) if all_vals else 0.0
-        v_max = max(all_vals) if all_vals else 100.0
-        span  = max(v_max - v_min, 1.0)
-        y_min = max(0.0,   v_min - max(2.0, span * 0.30))
-        y_max = min(100.0, v_max + max(1.0, span * 0.15))
-
-        fig, ax = plt.subplots(figsize=(14, 7))
-        for i, (loss_key, label, color) in enumerate(zip(loss_keys, loss_labels, colors)):
-            vals = [results[loss_key].get(m, 0) for m in metrics]
-            offset = (i - n_losses / 2 + 0.5) * width
-            bars = ax.bar(x + offset, vals, width, label=label,
-                          color=color, alpha=0.85, edgecolor="white")
-            label_offset = (y_max - y_min) * 0.008
-            for bar in bars:
-                h = bar.get_height()
-                if h > y_min:
-                    ax.text(
-                        bar.get_x() + bar.get_width() / 2,
-                        h + label_offset,
-                        f"{h:.2f}",
-                        ha="center", va="bottom", fontsize=5.5, rotation=90,
-                    )
-
-        ax.set_xticks(x)
-        ax.set_xticklabels(metric_labels, fontsize=11)
-        ax.set_ylabel("Score (%)", fontsize=11)
-        ax.set_title(
+        # One subplot per metric — each gets its own zoomed y-axis so even
+        # sub-1% differences between loss functions are clearly visible.
+        n_cols = 3
+        n_rows = (len(metrics) + n_cols - 1) // n_cols
+        fig, axes = plt.subplots(
+            n_rows, n_cols,
+            figsize=(16, 5 * n_rows),
+            gridspec_kw={"hspace": 0.60, "wspace": 0.35},
+        )
+        fig.suptitle(
             f"Loss Function Comparison — {dataset.upper()}",
             fontsize=12, fontweight="bold",
         )
-        ax.legend(fontsize=9, loc="lower right")
-        ax.grid(axis="y", alpha=0.3)
-        ax.set_ylim(y_min, y_max)
+        axes_flat = np.array(axes).flatten()
+
+        for m_idx, (mkey, mlabel) in enumerate(zip(metrics, metric_labels)):
+            ax   = axes_flat[m_idx]
+            vals = [results[k].get(mkey, 0) for k in loss_keys]
+
+            # Per-metric y-axis zoom
+            v_min = min(vals)
+            v_max = max(vals)
+            span  = max(v_max - v_min, 0.05)
+            y_min = max(0.0,   v_min - max(0.3, span * 0.8))
+            y_max = min(100.0, v_max + max(0.3, span * 1.5))
+            label_offset = (y_max - y_min) * 0.025
+
+            for i, (k, label, color) in enumerate(zip(loss_keys, loss_labels, colors)):
+                v = results[k].get(mkey, 0)
+                ax.bar(i, v, width=0.65, color=color, alpha=0.85,
+                       edgecolor="white", label=label)
+                ax.text(i, v + label_offset, f"{v:.2f}",
+                        ha="center", va="bottom", fontsize=7, rotation=45)
+
+            ax.set_xticks([])
+            ax.set_ylabel("Score (%)", fontsize=9)
+            ax.set_title(mlabel, fontsize=10, fontweight="bold")
+            ax.set_xlim(-0.6, n_losses - 0.4)
+            ax.set_ylim(y_min, y_max)
+            ax.grid(axis="y", alpha=0.3)
+
+        # Hide unused panels
+        for idx in range(len(metrics), len(axes_flat)):
+            axes_flat[idx].axis("off")
+
+        # Single figure-level legend below all subplots — no overlap risk
+        handles, labels = axes_flat[0].get_legend_handles_labels()
+        fig.legend(
+            handles, labels,
+            loc="lower center", ncol=min(n_losses, 3),
+            bbox_to_anchor=(0.5, -0.03),
+            fontsize=9, framealpha=0.9,
+        )
 
         path = self._out_dir / f"bar_chart_{dataset}.png"
         fig.savefig(str(path), dpi=150, bbox_inches="tight")
@@ -191,19 +214,18 @@ class ComparisonReporter:
     # ── Confusion matrix grid ─────────────────────────────────────────────────
 
     def _plot_confusion_matrices(self, results: Dict, dataset: str) -> Optional[Path]:
-        """Plot one normalized 2×2 confusion matrix per loss function.
+        """Plot one 2×2 confusion matrix per loss function using actual pixel counts.
 
-        Values are derived from averaged Sensitivity (TPR) and Specificity (TNR)
-        stored in the results JSON:
-          TPR = sensitivity / 100      FNR = 1 − TPR
-          TNR = specificity / 100      FPR = 1 − TNR
+        Pixel counts (TP, TN, FP, FN) are read from *_results.json.
+        If a file predates this feature (no count keys), falls back to
+        deriving approximate rates from Sensitivity / Specificity.
 
-        Row = Actual class, Col = Predicted class:
-          [TN  FP]   actual = Background
+        Layout — rows = Actual class, cols = Predicted class:
+          [TN  FP]   actual = Background (non-vessel)
           [FN  TP]   actual = Vessel
 
-        Cell colours match the visualization peta kesalahan:
-          TP = hijau, TN = hijau muda, FP = merah, FN = biru
+        Colour scheme matches segmentation_grid Peta Kesalahan:
+          TP = Hijau    FP = Merah    FN = Biru    TN = Hijau muda
         """
         try:
             import matplotlib
@@ -221,74 +243,112 @@ class ComparisonReporter:
         n_rows = (n + n_cols - 1) // n_cols
         fig, axes = plt.subplots(
             n_rows, n_cols,
-            figsize=(n_cols * 4.2, n_rows * 4.0),
-            gridspec_kw={"hspace": 0.55, "wspace": 0.35},
+            figsize=(n_cols * 4.8, n_rows * 4.6),
+            gridspec_kw={"hspace": 0.60, "wspace": 0.40},
         )
         axes_flat = np.array(axes).flatten()
 
-        # Base colours (RGB 0–1) — match peta kesalahan in visualization_reporter
-        _BASE = {
+        # Cell colours (RGB 0–1) — consistent with visualization_reporter
+        _CELL_COLOR = {
             "TN": np.array([0.55, 0.88, 0.55]),   # hijau muda
-            "FP": np.array([0.92, 0.45, 0.45]),   # merah
-            "FN": np.array([0.45, 0.45, 0.92]),   # biru
+            "FP": np.array([0.92, 0.40, 0.40]),   # merah
+            "FN": np.array([0.40, 0.40, 0.92]),   # biru
             "TP": np.array([0.10, 0.68, 0.10]),   # hijau tua
         }
-        _CELL_LABEL = [["TN", "FP"], ["FN", "TP"]]
+        # [row][col] mapping: row=Actual, col=Predicted
+        _CELL_KEY = [["TN", "FP"],   # Actual = Background
+                     ["FN", "TP"]]   # Actual = Vessel
 
         for idx, (loss_key, label) in enumerate(zip(loss_keys, loss_labels)):
             ax = axes_flat[idx]
             m  = results[loss_key]
 
-            tpr = m.get("sensitivity", 0) / 100.0
-            tnr = m.get("specificity", 0) / 100.0
-            fnr = 1.0 - tpr
-            fpr = 1.0 - tnr
+            # --- Retrieve per-image average pixel counts -----------------
+            has_counts = all(k in m for k in
+                             ("tp_count", "tn_count", "fp_count", "fn_count"))
+            n_imgs = max(int(m.get("num_images", 1)), 1)
 
-            # vals[row][col]: rows = Actual, cols = Predicted
-            vals = [[tnr, fpr],   # actual=Background: TN | FP
-                    [fnr, tpr]]   # actual=Vessel:      FN | TP
+            if has_counts:
+                # Opsi B: average pixel count per image
+                tp = m["tp_count"] / n_imgs
+                tn = m["tn_count"] / n_imgs
+                fp = m["fp_count"] / n_imgs
+                fn = m["fn_count"] / n_imgs
+            else:
+                # Fallback: derive approximate rates from averaged metrics
+                # (shown as float rates, flagged for re-evaluation)
+                tpr = m.get("sensitivity", 0) / 100.0
+                tnr = m.get("specificity", 0) / 100.0
+                tp, tn, fp, fn = tpr, tnr, 1.0 - tnr, 1.0 - tpr
 
-            # Build RGB image — white blended toward base colour by value intensity
-            rgb = np.ones((2, 2, 3), dtype=np.float64)
+            total = tp + tn + fp + fn if (tp + tn + fp + fn) > 0 else 1
+
+            # counts[row][col]: row=Actual, col=Predicted
+            counts = [[tn, fp],
+                      [fn, tp]]
+
+            # --- Cell background: intensity ∝ count / row maximum -------
+            row_maxes = [max(counts[r][0], counts[r][1]) for r in range(2)]
+            rgb_img = np.ones((2, 2, 3), dtype=np.float64)
             for r in range(2):
                 for c in range(2):
-                    v = vals[r][c]
-                    base = _BASE[_CELL_LABEL[r][c]]
-                    rgb[r, c] = 1.0 - v * (1.0 - base)   # lerp white → base
+                    v    = counts[r][c] / (row_maxes[r] + 1e-9)
+                    base = _CELL_COLOR[_CELL_KEY[r][c]]
+                    rgb_img[r, c] = 1.0 - v * (1.0 - base)
 
-            ax.imshow(rgb, interpolation="nearest", aspect="auto",
+            ax.imshow(rgb_img, interpolation="nearest", aspect="auto",
                       extent=[-0.5, 1.5, 1.5, -0.5])
+            ax.axhline(0.5, color="white", lw=3.0)
+            ax.axvline(0.5, color="white", lw=3.0)
 
-            # White grid lines between cells
-            ax.axhline(0.5, color="white", lw=2.5)
-            ax.axvline(0.5, color="white", lw=2.5)
-
-            # Cell text: label + percentage
+            # --- Cell text: label / avg pixel count / percentage ---------
             for r in range(2):
                 for c in range(2):
-                    v        = vals[r][c]
-                    cell_lbl = _CELL_LABEL[r][c]
-                    txt_col  = "white" if v > 0.50 else "black"
-                    ax.text(c, r,
-                            f"{cell_lbl}\n{v * 100:.2f}%",
+                    cnt      = counts[r][c]
+                    cell_key = _CELL_KEY[r][c]
+                    pct      = cnt / total * 100
+                    bg_val   = cnt / (row_maxes[r] + 1e-9)
+                    txt_col  = "white" if bg_val > 0.55 else "black"
+
+                    if has_counts:
+                        count_str = f"{cnt:,.0f} px"
+                        pct_str   = f"({pct:.2f}%)"
+                    else:
+                        count_str = f"{cnt * 100:.2f}%"
+                        pct_str   = "(~estimasi)"
+
+                    ax.text(c, r - 0.18, cell_key,
                             ha="center", va="center",
-                            fontsize=11, fontweight="bold",
-                            color=txt_col)
+                            fontsize=12, fontweight="bold", color=txt_col)
+                    ax.text(c, r + 0.10, count_str,
+                            ha="center", va="center",
+                            fontsize=10, fontweight="bold", color=txt_col)
+                    ax.text(c, r + 0.35, pct_str,
+                            ha="center", va="center",
+                            fontsize=8, color=txt_col)
 
             ax.set_xticks([0, 1])
-            ax.set_xticklabels(["Pred.\nBackground", "Pred.\nVessel"], fontsize=8)
+            ax.set_xticklabels(["Prediksi\nBackground", "Prediksi\nVessel"],
+                                fontsize=9)
             ax.set_yticks([0, 1])
-            ax.set_yticklabels(["Actual\nBackground", "Actual\nVessel"], fontsize=8)
+            ax.set_yticklabels(["Aktual\nBackground", "Aktual\nVessel"],
+                                fontsize=9)
             ax.tick_params(length=0)
-            ax.set_title(label, fontsize=9, fontweight="bold", pad=8)
+            ax.set_title(label, fontsize=10, fontweight="bold", pad=10)
+            if not has_counts:
+                ax.set_xlabel("⚠ Re-run evaluasi untuk pixel counts",
+                              fontsize=7, color="gray")
 
-        # Hide unused subplot panels
+        # Hide unused panels
         for idx in range(n, len(axes_flat)):
             axes_flat[idx].axis("off")
 
+        subtitle = (
+            "Rata-rata jumlah pixel per gambar test (total ÷ jumlah gambar)\n"
+            "Persentase relatif terhadap total pixel rata-rata per gambar"
+        )
         fig.suptitle(
-            f"Confusion Matrix (Normalized Rate) — {dataset.upper()}\n"
-            "Nilai diturunkan dari rata-rata Sensitivity & Specificity per gambar test",
+            f"Confusion Matrix — {dataset.upper()}\n{subtitle}",
             fontsize=11, fontweight="bold",
         )
 
