@@ -7,7 +7,7 @@ import numpy as np
 from PIL import Image
 
 from config import DriveConfig
-from src.preprocessing import PreprocessingPipeline, build_pipeline
+from src.preprocessing import IdentityStep, PreprocessingPipeline, build_pipeline
 
 
 def _read_image(path: str, mode: str = 'RGB') -> np.ndarray:
@@ -43,9 +43,12 @@ class DriveDataLoader:
         self.cfg = cfg
         self.target_h = cfg.input_size[0]
         self.target_w = cfg.input_size[1]
-        self._pipeline = pipeline or build_pipeline(
+        # Test pipeline: applied to raw original test images (preprocessing not pre-baked)
+        self._test_pipeline = pipeline or build_pipeline(
             cfg.preprocessing_mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid
         )
+        # Train/val: preprocessing is already baked into aug files at generation time
+        self._train_pipeline = PreprocessingPipeline([IdentityStep()])
 
     # ── Public API ──────────────────────────────────────────────────────────
 
@@ -76,7 +79,7 @@ class DriveDataLoader:
                 continue
 
             im    = _read_image(os.path.join(test_dir, fname), mode='RGB')
-            im    = self._pipeline.apply(im)
+            im    = self._test_pipeline.apply(im)
             label = _read_image(label_path, mode='L')
 
             im    = cv2.resize(im,    (self.cfg.original_w, self.cfg.original_h))
@@ -142,7 +145,7 @@ class DriveDataLoader:
                 continue
 
             im    = _read_image(os.path.join(img_dir, fname), mode='RGB')
-            im    = self._pipeline.apply(im)
+            im    = self._train_pipeline.apply(im)
             label = _read_image(label_path, mode='L')
 
             im_pad    = _pad_to(im,    self.target_h, self.target_w)

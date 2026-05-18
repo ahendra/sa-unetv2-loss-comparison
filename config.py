@@ -95,6 +95,13 @@ class DriveConfig:
         h, w, _ = self.input_size
         channels = 1 if self.preprocessing_mode in ("green", "green_clahe") else 3
         self.input_size = (h, w, channels)
+        # Mode-specific augmentation directories — preprocessing baked in at aug-time
+        _aug = _DATASETS_DIR / "DRIVE" / f"aug_{self.preprocessing_mode}"
+        self.aug_dir          = str(_aug)
+        self.aug_train_images = str(_aug / "train"    / "images")
+        self.aug_train_labels = str(_aug / "train"    / "labels")
+        self.aug_val_images   = str(_aug / "validate" / "images")
+        self.aug_val_labels   = str(_aug / "validate" / "labels")
 
 
 @dataclass
@@ -145,6 +152,13 @@ class StareConfig:
         h, w, _ = self.input_size
         channels = 1 if self.preprocessing_mode in ("green", "green_clahe") else 3
         self.input_size = (h, w, channels)
+        # Mode-specific augmentation directories — preprocessing baked in at aug-time
+        _aug = _DATASETS_DIR / "STARE" / f"aug_{self.preprocessing_mode}"
+        self.aug_dir          = str(_aug)
+        self.aug_train_images = str(_aug / "train"    / "images")
+        self.aug_train_labels = str(_aug / "train"    / "labels")
+        self.aug_val_images   = str(_aug / "validate" / "images")
+        self.aug_val_labels   = str(_aug / "validate" / "labels")
 
 
 # ── Loss function registry ────────────────────────────────────────────────────

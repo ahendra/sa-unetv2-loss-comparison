@@ -7,6 +7,7 @@ from typing import Optional, Union
 
 from config import DriveConfig, StareConfig, LOSS_FUNCTIONS, RESULTS_DIR
 from src.data import RetinalAugmentationRunner, DriveDataLoader, StareDataLoader
+from src.preprocessing import build_pipeline
 from src.evaluation import ModelEvaluator
 from src.losses import get_loss_function
 from src.training import ModelTrainer
@@ -58,11 +59,30 @@ def _prompt(options: list[str], back_label: str = "Back") -> int:
 
 # ── Augmentation ──────────────────────────────────────────────────────────────
 
-def _run_augmentation_drive(cfg: DriveConfig) -> None:
+def _run_augmentation_drive() -> None:
     _header("Augmentasi Dataset — DRIVE")
+    print("  Pilih mode preprocessing:\n")
+    mode_choice = _prompt(
+        [
+            "RGB Original   → aug_rgb/   (untuk training utama & eksperimen loss)",
+            "RGB + CLAHE    → aug_clahe/ (untuk ablation study preprocessing)",
+        ],
+        back_label="Kembali",
+    )
+    if mode_choice == 0:
+        return
+
+    mode = "rgb" if mode_choice == 1 else "clahe"
+    cfg  = DriveConfig(preprocessing_mode=mode)
+
+    _header(f"Augmentasi Dataset — DRIVE  [{mode.upper()}]")
     print(f"  Sumber gambar : {cfg.train_images}")
     print(f"  Sumber label  : {cfg.train_labels}")
     print(f"  Output        : {cfg.aug_dir}")
+    if mode == "clahe":
+        print("  Preprocessing : RGB + CLAHE diterapkan ke setiap gambar asli SEBELUM augmentasi")
+    else:
+        print("  Preprocessing : None (raw RGB)")
     print()
     print("  Spesifikasi augmentasi (SA-UNetV2 paper):")
     print("    randomRotation ×3, randomColor ×3, randomGaussian ×3")
@@ -77,7 +97,7 @@ def _run_augmentation_drive(cfg: DriveConfig) -> None:
 
     aug_train = Path(cfg.aug_train_images)
     if aug_train.exists() and any(aug_train.iterdir()):
-        ans = input("  Folder aug/train sudah ada. Hapus dan buat ulang? (y/n): ").strip().lower()
+        ans = input(f"  Folder {Path(cfg.aug_dir).name}/ sudah ada. Hapus dan buat ulang? (y/n): ").strip().lower()
         if ans != 'y':
             input("  Dilewati. Tekan Enter...")
             return
@@ -96,21 +116,42 @@ def _run_augmentation_drive(cfg: DriveConfig) -> None:
                 return f"{stem}_manual1{ext}"
         return f"{stem}_manual1.gif"
 
+    pipeline = build_pipeline(mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid) if mode != "rgb" else None
     runner = RetinalAugmentationRunner()
     runner.run(
-        src_img_dir    = cfg.train_images,
-        src_lbl_dir    = cfg.train_labels,
-        aug_base_dir   = cfg.aug_dir,
-        label_suffix_fn= drive_label_fn,
+        src_img_dir         = cfg.train_images,
+        src_lbl_dir         = cfg.train_labels,
+        aug_base_dir        = cfg.aug_dir,
+        label_suffix_fn     = drive_label_fn,
+        preprocessing_pipeline = pipeline,
     )
     input("\n  Selesai. Tekan Enter untuk kembali...")
 
 
-def _run_augmentation_stare(cfg: StareConfig) -> None:
+def _run_augmentation_stare() -> None:
     _header("Augmentasi Dataset — STARE")
+    print("  Pilih mode preprocessing:\n")
+    mode_choice = _prompt(
+        [
+            "RGB Original   → aug_rgb/   (untuk training utama & eksperimen loss)",
+            "RGB + CLAHE    → aug_clahe/ (untuk ablation study preprocessing)",
+        ],
+        back_label="Kembali",
+    )
+    if mode_choice == 0:
+        return
+
+    mode = "rgb" if mode_choice == 1 else "clahe"
+    cfg  = StareConfig(preprocessing_mode=mode)
+
+    _header(f"Augmentasi Dataset — STARE  [{mode.upper()}]")
     print(f"  Sumber gambar : {cfg.train_images}")
     print(f"  Sumber label  : {cfg.train_labels}")
     print(f"  Output        : {cfg.aug_dir}")
+    if mode == "clahe":
+        print("  Preprocessing : RGB + CLAHE diterapkan ke setiap gambar asli SEBELUM augmentasi")
+    else:
+        print("  Preprocessing : None (raw RGB)")
     print()
     print("  Spesifikasi augmentasi (SA-UNetV2 paper — STARE):")
     print("    randomRotation ×3, randomColor ×3, randomGaussian ×3")
@@ -125,7 +166,7 @@ def _run_augmentation_stare(cfg: StareConfig) -> None:
 
     aug_train = Path(cfg.aug_train_images)
     if aug_train.exists() and any(aug_train.iterdir()):
-        ans = input("  Folder aug/train sudah ada. Hapus dan buat ulang? (y/n): ").strip().lower()
+        ans = input(f"  Folder {Path(cfg.aug_dir).name}/ sudah ada. Hapus dan buat ulang? (y/n): ").strip().lower()
         if ans != 'y':
             input("  Dilewati. Tekan Enter...")
             return
@@ -140,17 +181,68 @@ def _run_augmentation_stare(cfg: StareConfig) -> None:
         base = os.path.splitext(img_name)[0]
         return f"{base}.ah.ppm"
 
+    pipeline = build_pipeline(mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid) if mode != "rgb" else None
     runner = RetinalAugmentationRunner()
     runner.run(
-        src_img_dir    = cfg.train_images,
-        src_lbl_dir    = cfg.train_labels,
-        aug_base_dir   = cfg.aug_dir,
-        label_suffix_fn= stare_label_fn,
+        src_img_dir         = cfg.train_images,
+        src_lbl_dir         = cfg.train_labels,
+        aug_base_dir        = cfg.aug_dir,
+        label_suffix_fn     = stare_label_fn,
+        preprocessing_pipeline = pipeline,
     )
     input("\n  Selesai. Tekan Enter untuk kembali...")
 
 
 # ── Training ──────────────────────────────────────────────────────────────────
+
+def _ensure_aug_dir(cfg) -> bool:
+    """Cek apakah aug dir untuk mode aktif sudah ada; tawarkan generate jika belum.
+
+    Returns True jika dir sudah ada atau berhasil di-generate, False jika dibatalkan.
+    """
+    aug_train = Path(cfg.aug_train_images)
+    if aug_train.exists() and any(aug_train.iterdir()):
+        return True
+
+    mode = cfg.preprocessing_mode
+    print(f"\n  [WARN] Folder augmentasi untuk mode '{mode}' belum ditemukan:")
+    print(f"         {cfg.aug_dir}")
+    print(f"\n  Folder ini diperlukan sebelum training dapat dimulai.")
+    ans = input("  Generate augmentasi sekarang? (y/n): ").strip().lower()
+    if ans != 'y':
+        input("  Dibatalkan. Tekan Enter untuk kembali...")
+        return False
+
+    if not Path(cfg.train_images).is_dir():
+        print(f"\n  [ERROR] Direktori sumber gambar tidak ditemukan: {cfg.train_images}")
+        input("  Tekan Enter untuk kembali...")
+        return False
+
+    pipeline = (build_pipeline(mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid)
+                if mode != "rgb" else None)
+
+    if isinstance(cfg, DriveConfig):
+        def label_fn(img_name: str) -> str:
+            stem = img_name.split('_')[0]
+            for ext in ('.gif', '.png'):
+                candidate = os.path.join(cfg.train_labels, f"{stem}_manual1{ext}")
+                if os.path.exists(candidate):
+                    return f"{stem}_manual1{ext}"
+            return f"{stem}_manual1.gif"
+    else:
+        def label_fn(img_name: str) -> str:
+            base = os.path.splitext(img_name)[0]
+            return f"{base}.ah.ppm"
+
+    RetinalAugmentationRunner().run(
+        src_img_dir         = cfg.train_images,
+        src_lbl_dir         = cfg.train_labels,
+        aug_base_dir        = cfg.aug_dir,
+        label_suffix_fn     = label_fn,
+        preprocessing_pipeline = pipeline,
+    )
+    return True
+
 
 def _loss_selection_menu(trainer: ModelTrainer, cfg) -> None:
     _header(f"Training Model — {cfg.name}")
@@ -210,6 +302,8 @@ def _train_all(trainer: ModelTrainer, cfg) -> None:
 
 
 def _load_training_data(cfg):
+    if not _ensure_aug_dir(cfg):
+        return None, None, None, None
     try:
         if isinstance(cfg, DriveConfig):
             loader = DriveDataLoader(cfg)
@@ -546,9 +640,9 @@ def _dataset_menu(dataset_name: str) -> None:
             break
         elif choice == 1:
             if dataset_name == "DRIVE":
-                _run_augmentation_drive(cfg)
+                _run_augmentation_drive()
             else:
-                _run_augmentation_stare(cfg)
+                _run_augmentation_stare()
         elif choice == 2:
             _loss_selection_menu(trainer, cfg)
         elif choice == 3:

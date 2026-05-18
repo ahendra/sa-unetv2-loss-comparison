@@ -1,5 +1,6 @@
 import gc
 import json
+import os
 import time
 from pathlib import Path
 from typing import Dict, List, Tuple, Union
@@ -7,6 +8,7 @@ from typing import Dict, List, Tuple, Union
 import numpy as np
 
 from config import DriveConfig, LOSS_FUNCTIONS, RESULTS_DIR, WEIGHTS_DIR
+from src.data.augmentation import RetinalAugmentationRunner
 from src.preprocessing import build_pipeline
 
 
@@ -22,6 +24,39 @@ _CONDITIONS: List[Tuple[str, str]] = [
 ]
 
 _ABLATION_LOSS_KEY = "bce_mcc"
+
+
+def _drive_label_fn(img_fname: str, train_labels_dir: str) -> str:
+    stem = img_fname.split('_')[0]
+    for ext in ('.gif', '.png'):
+        if os.path.exists(os.path.join(train_labels_dir, f"{stem}_manual1{ext}")):
+            return f"{stem}_manual1{ext}"
+    return f"{stem}_manual1.gif"
+
+
+def _ensure_drive_aug(cfg: DriveConfig, pipeline) -> None:
+    """Generate mode-specific DRIVE aug dir if not present.
+
+    Preprocessing pipeline is applied to each original image BEFORE augmentation
+    so that saved files already contain the preprocessed content.
+    For mode='rgb', pipeline is IdentityStep — no preprocessing applied.
+    """
+    aug_train = Path(cfg.aug_train_images)
+    if aug_train.exists() and any(aug_train.iterdir()):
+        return
+
+    print(f"\n  [INFO] Augmented data untuk mode '{cfg.preprocessing_mode}' belum tersedia.")
+    print(f"         Generate ke: {cfg.aug_dir} ...")
+
+    pre_pipeline = None if cfg.preprocessing_mode == "rgb" else pipeline
+
+    RetinalAugmentationRunner().run(
+        src_img_dir=cfg.train_images,
+        src_lbl_dir=cfg.train_labels,
+        aug_base_dir=cfg.aug_dir,
+        label_suffix_fn=lambda f: _drive_label_fn(f, cfg.train_labels),
+        preprocessing_pipeline=pre_pipeline,
+    )
 
 
 class AblationReporter:
@@ -58,8 +93,11 @@ class AblationReporter:
             print(f"  Ablation: {label}")
             print(f"  {'─'*52}")
 
-            cfg = DriveConfig(preprocessing_mode=mode)
+            cfg      = DriveConfig(preprocessing_mode=mode)
             pipeline = build_pipeline(mode, cfg.clahe_clip_limit, cfg.clahe_tile_grid)
+
+            # Auto-generate mode-specific aug dir if not present
+            _ensure_drive_aug(cfg, pipeline)
 
             from src.data import DriveDataLoader
             loader = DriveDataLoader(cfg, pipeline)
@@ -99,6 +137,7 @@ class AblationReporter:
         from config import LOSS_PARAMS
         from src.losses import get_loss_function
         from src.models import build_sa_unetv2
+        from src.training.trainer import set_global_seed
 
         class _ProgressCB(Callback):
             def __init__(self, total):
@@ -139,6 +178,7 @@ class AblationReporter:
         )
         weight_path.parent.mkdir(parents=True, exist_ok=True)
 
+        set_global_seed()
         model = build_sa_unetv2(
             input_size=cfg.input_size,
             start_neurons=cfg.start_neurons,

@@ -138,12 +138,17 @@ class RetinalAugmentationRunner:
         src_lbl_dir: str,
         aug_base_dir: str,
         label_suffix_fn: Callable[[str], str],
+        preprocessing_pipeline=None,
     ) -> None:
         """
-        src_img_dir     : original training images directory
-        src_lbl_dir     : original training labels directory
-        aug_base_dir    : output base (creates train/ and validate/ inside)
-        label_suffix_fn : callable(img_fname) -> label_fname
+        src_img_dir           : original training images directory
+        src_lbl_dir           : original training labels directory
+        aug_base_dir          : output base (creates train/ and validate/ inside)
+        label_suffix_fn       : callable(img_fname) -> label_fname
+        preprocessing_pipeline: optional PreprocessingPipeline applied to each
+                                 original image BEFORE augmentation so that all
+                                 saved files already contain the preprocessed
+                                 content (e.g. CLAHE-enhanced RGB).
         """
 
         if RANDOM_SEED is not None:
@@ -174,7 +179,10 @@ class RetinalAugmentationRunner:
         n_orig = len(img_files)
         n_total = n_orig * (reps_total + 1)
 
+        _pre_desc = (preprocessing_pipeline.description
+                     if preprocessing_pipeline is not None else "none (raw RGB)")
         print(f"\n  Sumber gambar        : {src_img_dir}")
+        print(f"  Preprocessing        : {_pre_desc}")
         print(f"  Jumlah gambar asli   : {n_orig}")
         print(f"  Augmentasi per gambar: {reps_total} + 1 (original) = {reps_total + 1}")
         print(f"  Total estimasi       : {n_total} gambar\n")
@@ -191,6 +199,8 @@ class RetinalAugmentationRunner:
                 continue
 
             img = Image.open(os.path.join(src_img_dir, img_fname)).convert('RGB')
+            if preprocessing_pipeline is not None:
+                img = Image.fromarray(preprocessing_pipeline.apply(np.array(img)))
             lbl = Image.open(lbl_path).convert('L')
 
             # Convert original to PNG (normalizes format to match augmented outputs)

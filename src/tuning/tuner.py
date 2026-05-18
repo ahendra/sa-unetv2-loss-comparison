@@ -7,7 +7,7 @@ from typing import Union
 import numpy as np
 from sklearn.metrics import f1_score
 
-from config import DriveConfig, StareConfig, RESULTS_DIR
+from config import DriveConfig, StareConfig, RESULTS_DIR, RANDOM_SEED
 
 # Early-stopping patience inside each trial (separate from main training)
 _TRIAL_PATIENCE = 7
@@ -311,7 +311,7 @@ class LossTuner:
             storage     = self.storage,
             load_if_exists = True,          # resume jika study sudah ada di SQLite
             direction   = "maximize",
-            sampler     = optuna.samplers.TPESampler(seed=42),
+            sampler     = optuna.samplers.TPESampler(seed=RANDOM_SEED),
             pruner      = optuna.pruners.MedianPruner(n_startup_trials=5),
         )
 
