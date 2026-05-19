@@ -113,7 +113,18 @@ class AblationReporter:
                 x_test, y_test, masks, loader.restore_predictions, n_epochs,
             )
             results[mode] = {"label": label, "metrics": metrics, "elapsed_sec": elapsed}
-            print(f"  F1={metrics['f1']:.2f}  Sensitivity={metrics['sensitivity']:.2f}")
+            print(
+                f"  Acc={metrics['accuracy']:.2f}%  "
+                f"Sen={metrics['sensitivity']:.2f}%  "
+                f"Spe={metrics['specificity']:.2f}%  "
+                f"F1={metrics['f1']:.2f}%  "
+                f"AUC={metrics['auc']:.2f}%\n"
+                f"  Jac={metrics['jaccard']:.2f}%  "
+                f"MCC={metrics['mcc']:.2f}%  "
+                f"clDice={metrics['cldice']:.2f}%  "
+                f"β0Err={metrics['betti0_error']:.2f}  "
+                f"β1Err={metrics['betti1_error']:.2f}"
+            )
 
         self._save(results)
         self._plot(results)
@@ -224,8 +235,10 @@ class AblationReporter:
             accuracy_score, confusion_matrix, f1_score,
             jaccard_score, matthews_corrcoef, recall_score, roc_auc_score,
         )
+        from src.evaluation.evaluator import _betti_numbers
+        from src.evaluation.evaluator import _cldice as _eval_cldice
 
-        # Per-image metrics then average — same method as ModelEvaluator
+        # Per-image metrics then average — identical method as ModelEvaluator
         per_image: list = []
         for i, (pred, gt) in enumerate(zip(y_pred, y_test)):
             prob    = pred.squeeze().astype(np.float32)          # (H, W)
@@ -238,6 +251,8 @@ class AblationReporter:
             gt_flat   = (gt_2d > 0.5).astype(np.uint8).ravel()
 
             # Apply FOV mask — same logic as ModelEvaluator
+            pred_bin_2d = pred_bin
+            gt_2d_masked = (gt_2d > 0.5).astype(np.uint8)
             if masks is not None and i < len(masks):
                 mask_flat = masks[i].ravel() if masks[i].ndim > 1 else masks[i]
                 idx = np.where(mask_flat > 0.5)[0]
@@ -246,20 +261,29 @@ class AblationReporter:
                 prob_flat = prob_flat[idx]
                 bin_flat  = bin_flat[idx]
                 gt_flat   = gt_flat[idx]
+                mask_2d      = (masks[i] if masks[i].ndim == 2
+                                else masks[i].squeeze()) > 0.5
+                pred_bin_2d  = (pred_bin & mask_2d).astype(np.uint8)
+                gt_2d_masked = ((gt_2d > 0.5) & mask_2d).astype(np.uint8)
 
             try:
-                tn, fp, *_ = confusion_matrix(gt_flat, bin_flat).ravel()
+                tn, fp = confusion_matrix(gt_flat, bin_flat).ravel()[:2]
+                b0_true, b1_true = _betti_numbers(gt_2d_masked)
+                b0_pred, b1_pred = _betti_numbers(pred_bin_2d)
                 per_image.append({
-                    "accuracy":    float(accuracy_score(gt_flat, bin_flat)),
-                    "sensitivity": float(recall_score(gt_flat, bin_flat,
-                                                      zero_division=0)),
-                    "specificity": float(tn / (tn + fp + 1e-8)),
-                    "f1":          float(f1_score(gt_flat, bin_flat,
-                                                  zero_division=0)),
-                    "jaccard":     float(jaccard_score(gt_flat, bin_flat,
+                    "accuracy":     float(accuracy_score(gt_flat, bin_flat)),
+                    "sensitivity":  float(recall_score(gt_flat, bin_flat,
                                                        zero_division=0)),
-                    "mcc":         float(matthews_corrcoef(gt_flat, bin_flat)),
-                    "auc":         float(roc_auc_score(gt_flat, prob_flat)),
+                    "specificity":  float(tn / (tn + fp + 1e-8)),
+                    "f1":           float(f1_score(gt_flat, bin_flat,
+                                                   zero_division=0)),
+                    "jaccard":      float(jaccard_score(gt_flat, bin_flat,
+                                                        zero_division=0)),
+                    "mcc":          float(matthews_corrcoef(gt_flat, bin_flat)),
+                    "auc":          float(roc_auc_score(gt_flat, prob_flat)),
+                    "cldice":       float(_eval_cldice(gt_2d_masked, pred_bin_2d)),
+                    "betti0_error": abs(b0_pred - b0_true),
+                    "betti1_error": abs(b1_pred - b1_true),
                 })
             except Exception as exc:
                 print(f"  [WARN] Metrik gambar {i + 1} dilewati: {exc}")
@@ -267,11 +291,12 @@ class AblationReporter:
         if not per_image:
             raise RuntimeError("Tidak ada metrik yang berhasil dihitung.")
 
-        # Average across images (same as ModelEvaluator)
-        metrics = {
-            k: round(float(np.mean([m[k] for m in per_image])) * 100, 2)
-            for k in per_image[0]
-        }
+        # Rate metrics → multiply by 100; betti errors → keep as raw count
+        _betti_keys = {"betti0_error", "betti1_error"}
+        metrics = {}
+        for k in per_image[0]:
+            avg = float(np.mean([m[k] for m in per_image]))
+            metrics[k] = round(avg, 2) if k in _betti_keys else round(avg * 100, 2)
 
         del model
         gc.collect()
@@ -299,25 +324,28 @@ class AblationReporter:
 
     def _build_table(self, results: Dict) -> str:
         _COLS = [
-            ("accuracy",    "Accuracy (%)"),
-            ("sensitivity", "Sensitivity (%)"),
-            ("specificity", "Specificity (%)"),
-            ("f1",          "F1 (%)"),
-            ("jaccard",     "Jaccard (%)"),
-            ("auc",         "AUC (%)"),
-            ("mcc",         "MCC (%)"),
+            ("accuracy",      "Accuracy (%)",   False),
+            ("sensitivity",   "Sensitivity (%)", False),
+            ("specificity",   "Specificity (%)", False),
+            ("f1",            "F1 (%)",          False),
+            ("jaccard",       "Jaccard (%)",     False),
+            ("auc",           "AUC (%)",         False),
+            ("mcc",           "MCC (%)",         False),
+            ("cldice",        "clDice (%)",      False),
+            ("betti0_error",  "β0 Err",          True),   # lower is better
+            ("betti1_error",  "β1 Err",          True),   # lower is better
         ]
-        col_labels  = [lbl for _, lbl in _COLS]
-        col_keys    = [k   for k, _  in _COLS]
-        cond_labels = [v["label"] for v in results.values()]
+        col_labels      = [lbl  for _, lbl, _   in _COLS]
+        col_keys        = [k    for k, _, _      in _COLS]
+        col_lower_better = [lib for _, _, lib    in _COLS]
+        cond_labels     = [v["label"] for v in results.values()]
 
-        # Column widths
         w_cond = max(len(s) for s in cond_labels) + 2
         w_col  = max(max(len(l) for l in col_labels), 10) + 2
 
-        sep  = "+" + ("-" * w_cond) + "+" + (("-" * w_col + "+") * len(_COLS))
-        hdr  = ("|" + "Kondisi Preprocessing".center(w_cond) + "|"
-                + "".join(l.center(w_col) + "|" for l in col_labels))
+        sep = "+" + ("-" * w_cond) + "+" + (("-" * w_col + "+") * len(_COLS))
+        hdr = ("|" + "Kondisi Preprocessing".center(w_cond) + "|"
+               + "".join(l.center(w_col) + "|" for l in col_labels))
 
         lines = [
             "",
@@ -329,7 +357,6 @@ class AblationReporter:
             "  " + sep,
         ]
 
-        # Collect values per metric to find best
         metric_vals = {k: [] for k in col_keys}
         for entry in results.values():
             for k in col_keys:
@@ -338,19 +365,19 @@ class AblationReporter:
         for mode, entry in results.items():
             m = entry["metrics"]
             row = "|" + entry["label"].center(w_cond) + "|"
-            for k in col_keys:
-                val = m.get(k, float("nan"))
-                cell = f"{val:.2f}"
-                # Mark best value with *
+            for k, lower_better in zip(col_keys, col_lower_better):
+                val   = m.get(k, float("nan"))
+                cell  = f"{val:.2f}"
                 valid = [v for v in metric_vals[k] if v == v]
-                if valid and abs(val - max(valid)) < 0.001:
+                best  = min(valid) if lower_better else max(valid)
+                if valid and abs(val - best) < 0.001:
                     cell += "*"
                 row += cell.center(w_col) + "|"
             lines.append("  " + row)
 
         lines += [
             "  " + sep,
-            "  * = nilai terbaik per metrik",
+            "  * = nilai terbaik per metrik  |  β0/β1 Err: lower is better (raw count)",
             "",
         ]
         return "\n".join(lines)
@@ -364,20 +391,31 @@ class AblationReporter:
             print("  [WARN] matplotlib tidak terinstall, skip plot.")
             return
 
-        metric_keys   = ["accuracy", "sensitivity", "specificity", "f1", "jaccard", "auc"]
-        metric_labels = ["Accuracy", "Sensitivity", "Specificity", "F1", "Jaccard", "AUC"]
-        n_cond      = len(results)
-        cond_items  = list(results.items())
-        colors      = plt.cm.tab10(np.linspace(0, 1, n_cond))
+        # (key, label, lower_is_better)
+        _METRICS = [
+            ("accuracy",     "Accuracy",    False),
+            ("sensitivity",  "Sensitivity", False),
+            ("specificity",  "Specificity", False),
+            ("f1",           "F1",          False),
+            ("jaccard",      "Jaccard",     False),
+            ("auc",          "AUC",         False),
+            ("mcc",          "MCC",         False),
+            ("cldice",       "clDice",      False),
+            ("betti0_error", "β0 Error",    True),
+            ("betti1_error", "β1 Error",    True),
+        ]
+        n_cond     = len(results)
+        cond_items = list(results.items())
+        colors     = plt.cm.tab10(np.linspace(0, 1, n_cond))
 
-        # One subplot per metric — each gets its own zoomed y-axis so even 0.1%
+        # One subplot per metric — each gets its own y-axis so small
         # differences between conditions are clearly visible.
-        n_cols = 3
-        n_rows = (len(metric_keys) + n_cols - 1) // n_cols
+        n_cols = 4
+        n_rows = (len(_METRICS) + n_cols - 1) // n_cols
         fig, axes = plt.subplots(
             n_rows, n_cols,
-            figsize=(14, 4.5 * n_rows),
-            gridspec_kw={"hspace": 0.55, "wspace": 0.35},
+            figsize=(16, 4.5 * n_rows),
+            gridspec_kw={"hspace": 0.60, "wspace": 0.38},
         )
         fig.suptitle(
             "Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)",
@@ -385,16 +423,24 @@ class AblationReporter:
         )
         axes_flat = np.array(axes).flatten()
 
-        for m_idx, (mkey, mlabel) in enumerate(zip(metric_keys, metric_labels)):
+        for m_idx, (mkey, mlabel, lower_better) in enumerate(_METRICS):
             ax   = axes_flat[m_idx]
             vals = [entry["metrics"].get(mkey, 0) for _, entry in cond_items]
 
-            # Per-metric y-axis zoom
             v_min = min(vals)
             v_max = max(vals)
             span  = max(v_max - v_min, 0.05)
-            y_min = max(0.0,   v_min - max(0.5, span * 0.8))
-            y_max = min(100.0, v_max + max(0.5, span * 1.5))
+
+            if lower_better:
+                # β0/β1 error: raw count, no percentage cap
+                y_min = max(0.0, v_min - max(0.3, span * 0.8))
+                y_max = v_max + max(0.3, span * 1.5)
+                y_label = "Count (avg/image)"
+            else:
+                y_min = max(0.0,   v_min - max(0.5, span * 0.8))
+                y_max = min(100.0, v_max + max(0.5, span * 1.5))
+                y_label = "Score (%)"
+
             label_offset = (y_max - y_min) * 0.025
 
             for i, ((_, entry), color) in enumerate(zip(cond_items, colors)):
@@ -404,19 +450,22 @@ class AblationReporter:
                 ax.text(i, v + label_offset, f"{v:.2f}",
                         ha="center", va="bottom", fontsize=9, fontweight="bold")
 
+            if lower_better:
+                ax.set_title(f"{mlabel}\n(↓ lower is better)",
+                             fontsize=9, fontweight="bold")
+            else:
+                ax.set_title(mlabel, fontsize=10, fontweight="bold")
+
             ax.set_xticks(range(n_cond))
             ax.set_xticklabels(
-                [entry["label"] for _, entry in cond_items],
-                fontsize=9,
-            )
+                [entry["label"] for _, entry in cond_items], fontsize=9)
             ax.set_xlim(-0.6, n_cond - 0.4)
-            ax.set_ylabel("Score (%)", fontsize=9)
-            ax.set_title(mlabel, fontsize=10, fontweight="bold")
+            ax.set_ylabel(y_label, fontsize=9)
             ax.set_ylim(y_min, y_max)
             ax.grid(axis="y", alpha=0.3)
 
         # Hide any unused subplot panels
-        for idx in range(len(metric_keys), len(axes_flat)):
+        for idx in range(len(_METRICS), len(axes_flat)):
             axes_flat[idx].axis("off")
 
         # Single figure-level legend placed below all subplots
