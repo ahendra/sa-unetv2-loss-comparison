@@ -13,8 +13,8 @@ from src.losses import get_loss_function
 from src.training import ModelTrainer
 from src.tuning import LossTuner
 from src.reporting import (
-    AblationReporter, ComparisonReporter, EnvironmentReporter,
-    HistoryReporter, VisualizationReporter,
+    AblationReporter, ClaheTuningReporter, ComparisonReporter,
+    EnvironmentReporter, HistoryReporter, VisualizationReporter,
 )
 
 
@@ -529,6 +529,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
         [
             "4.1  Lingkungan Eksperimen",
             "4.2  Preprocessing Ablation Study",
+            "4.3  CLAHE Parameter Tuning Study",
             "4.4  Training History Curves",
             "4.5  Segmentation Visualization Grid",
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
@@ -543,12 +544,14 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 2:
         _run_ablation_report(base / "section_4_2_ablation")
     elif choice == 3:
-        _run_history_report(cfg, trainer, base / "section_4_4_history")
+        _run_clahe_tuning_report(base / "section_4_3_clahe_tuning")
     elif choice == 4:
-        _run_visualization_report(cfg, trainer, base / "section_4_5_visualization")
+        _run_history_report(cfg, trainer, base / "section_4_4_history")
     elif choice == 5:
-        _run_comparison_report(cfg, base / "section_4_6_comparison")
+        _run_visualization_report(cfg, trainer, base / "section_4_5_visualization")
     elif choice == 6:
+        _run_comparison_report(cfg, base / "section_4_6_comparison")
+    elif choice == 7:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -563,6 +566,17 @@ def _run_ablation_report(out_dir) -> None:
     print("  Melatih BCE+MCC pada DRIVE dengan 2 kondisi preprocessing.")
     n_epochs = _ask_int("Epochs per kondisi (gunakan 150 untuk hasil publikasi)", 50, 5, 150)
     reporter = AblationReporter(out_dir)
+    reporter.run(n_epochs=n_epochs)
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_clahe_tuning_report(out_dir) -> None:
+    print("\n  CLAHE Parameter Tuning Study")
+    print("  Pencarian sequential: Step A (5 clipLimit × tile=8) → Step B (2 tileGridSize).")
+    print("  Total: 7 kombinasi × 2 dataset (DRIVE+STARE) = 14 training run.")
+    print("  Setiap run: augment dari nol → train BCE+MCC → evaluate.\n")
+    n_epochs = _ask_int("Epochs per run (gunakan 150 untuk hasil publikasi)", 50, 5, 150)
+    reporter = ClaheTuningReporter(out_dir)
     reporter.run(n_epochs=n_epochs)
     input("\n  Tekan Enter untuk kembali...")
 
