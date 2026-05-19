@@ -139,6 +139,7 @@ class ModelTrainer:
             ),
         ]
 
+        t0 = time.perf_counter()
         history = model.fit(
             x_train, y_train,
             epochs=self.cfg.epochs,
@@ -148,8 +149,9 @@ class ModelTrainer:
             callbacks=callbacks,
             verbose=0,
         )
+        elapsed = round(time.perf_counter() - t0, 2)
 
-        self._save_history(loss_name, history.history)
+        self._save_history(loss_name, history.history, elapsed)
         return model
 
     def load_weights(self, loss_name: str) -> keras.Model:
@@ -181,10 +183,12 @@ class ModelTrainer:
         with open(path) as f:
             return json.load(f)
 
-    def _save_history(self, loss_name: str, history_dict: dict) -> None:
+    def _save_history(self, loss_name: str, history_dict: dict,
+                      elapsed_sec: float = 0.0) -> None:
         path = self._history_path(loss_name)
         path.parent.mkdir(parents=True, exist_ok=True)
         serializable = {k: [float(v) for v in vals] for k, vals in history_dict.items()}
+        serializable["elapsed_sec"] = elapsed_sec
         with open(path, "w") as f:
             json.dump(serializable, f, indent=2)
 
