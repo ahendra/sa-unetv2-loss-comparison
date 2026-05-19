@@ -560,7 +560,7 @@ def _run_env_report(out_dir) -> None:
 
 def _run_ablation_report(out_dir) -> None:
     print("\n  Preprocessing Ablation Study")
-    print("  Melatih BCE+MCC pada DRIVE dengan 3 kondisi preprocessing.")
+    print("  Melatih BCE+MCC pada DRIVE dengan 2 kondisi preprocessing.")
     n_epochs = _ask_int("Epochs per kondisi (gunakan 150 untuk hasil publikasi)", 50, 5, 150)
     reporter = AblationReporter(out_dir)
     reporter.run(n_epochs=n_epochs)
