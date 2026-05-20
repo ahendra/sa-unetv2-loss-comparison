@@ -2,7 +2,7 @@
 
 Sequential grid search:
   Step A — Fix tileGridSize=8, vary clipLimit ∈ [1.0, 1.5, 2.0, 3.0, 4.0]
-            Pick best clipLimit (highest avg F1 across DRIVE+STARE).
+            Pick best clipLimit via weighted composite score (F1+AUC+Sensitivity+β0).
   Step B — Fix best_clip from Step A, vary tileGridSize ∈ [4, 16]
             (tileGridSize=8 is already covered in Step A, so +2 runs only)
 
@@ -51,7 +51,16 @@ _METRIC_KEYS = [
     "mcc", "f1", "jaccard", "cldice", "betti0_error", "betti1_error",
 ]
 _LOWER_IS_BETTER = {"betti0_error", "betti1_error"}
-_PRIMARY_METRIC  = "f1"   # metric used to select the best combination
+
+# Weights for composite scoring used to select the best combination.
+# Each metric is min-max normalised per-dataset before weighting so that
+# different absolute value ranges (e.g. % vs count) do not skew the result.
+SCORING_WEIGHTS: Dict[str, float] = {
+    "f1":           0.35,   # primary segmentation metric
+    "auc":          0.25,   # overall discriminative ability
+    "sensitivity":  0.20,   # vessel recall (clinically important)
+    "betti0_error": 0.20,   # topological integrity (lower is better)
+}
 
 
 # ── Naming helpers ────────────────────────────────────────────────────────────
@@ -133,7 +142,7 @@ class ClaheTuningReporter:
 
         step_a_best_clip = self._pick_best_clip(all_results, STEP_A_CLIPS, STEP_A_TILE)
         print(f"\n  ✓ Step A best clipLimit: {step_a_best_clip}  "
-              f"(avg F1 across DRIVE+STARE)")
+              f"(composite score across DRIVE+STARE)")
 
         # ── Step B: vary tileGridSize, fixed best_clip ────────────────────────
         print("\n" + "=" * 62)
@@ -294,21 +303,61 @@ class ClaheTuningReporter:
         # Strip the clip/tile fields so caller gets pure metrics dict
         return {k: v for k, v in data.items() if k not in ("clip", "tile")}
 
-    # ── Best-combination selection ────────────────────────────────────────────
+    # ── Best-combination selection (multi-metric composite score) ────────────
 
-    def _avg_metric(
+    @staticmethod
+    def _composite_score(metrics: Dict, reference: List[Dict]) -> float:
+        """Weighted composite score normalised against a reference set.
+
+        Each metric is min-max normalised within `reference` so value ranges
+        do not skew the result.  Lower-is-better metrics are inverted after
+        normalisation.  Returns a value in [0, 1].
+        """
+        score = 0.0
+        for metric, weight in SCORING_WEIGHTS.items():
+            vals = [m.get(metric, 0.0) for m in reference if m]
+            lo, hi = min(vals), max(vals)
+            val  = metrics.get(metric, 0.0)
+            norm = (val - lo) / (hi - lo) if hi > lo else 0.5
+            if metric in _LOWER_IS_BETTER:
+                norm = 1.0 - norm
+            score += weight * norm
+        return score
+
+    def _avg_composite(
         self,
         all_results: Dict[str, Dict[str, Dict]],
         clip: float,
         tile: int,
-        metric: str,
     ) -> float:
-        tag  = _tag(clip, tile)
-        vals = [
-            all_results[d].get(tag, {}).get(metric, 0.0)
-            for d in DATASETS
-        ]
-        return sum(vals) / len(vals)
+        """Average composite score across both datasets for one (clip, tile)."""
+        tag    = _tag(clip, tile)
+        scores = []
+        for dataset in DATASETS:
+            d_data = all_results.get(dataset, {})
+            target = d_data.get(tag)
+            if not target:
+                continue
+            ref = [v for v in d_data.values() if v]
+            if not ref:
+                continue
+            scores.append(self._composite_score(target, ref))
+        return sum(scores) / len(scores) if scores else 0.0
+
+    def _all_composite_scores(
+        self, all_results: Dict[str, Dict[str, Dict]]
+    ) -> Dict[str, Dict[str, float]]:
+        """Compute composite scores for every (dataset, tag) combination."""
+        out: Dict[str, Dict[str, float]] = {}
+        for dataset in DATASETS:
+            d_data = all_results.get(dataset, {})
+            ref    = [v for v in d_data.values() if v]
+            out[dataset] = {
+                tag: self._composite_score(m, ref)
+                for tag, m in d_data.items()
+                if m and ref
+            }
+        return out
 
     def _pick_best_clip(
         self,
@@ -318,7 +367,7 @@ class ClaheTuningReporter:
     ) -> float:
         return max(
             clips,
-            key=lambda c: self._avg_metric(all_results, c, tile, _PRIMARY_METRIC),
+            key=lambda c: self._avg_composite(all_results, c, tile),
         )
 
     def _pick_best_overall(
@@ -330,9 +379,7 @@ class ClaheTuningReporter:
         candidates += [(step_a_best_clip, t) for t in STEP_B_TILES]
         return max(
             candidates,
-            key=lambda ct: self._avg_metric(
-                all_results, ct[0], ct[1], _PRIMARY_METRIC
-            ),
+            key=lambda ct: self._avg_composite(all_results, ct[0], ct[1]),
         )
 
     # ── Persistence ───────────────────────────────────────────────────────────
@@ -344,21 +391,27 @@ class ClaheTuningReporter:
         best_tile: int,
         step_a_best_clip: float,
     ) -> None:
+        scores = self._all_composite_scores(all_results)
         out = {
             "step_a_best_clip": step_a_best_clip,
             "recommendation": {
                 "clipLimit":    best_clip,
                 "tileGridSize": best_tile,
             },
+            "scoring_weights": SCORING_WEIGHTS,
+            "composite_scores": {
+                dataset: {
+                    tag: round(s, 4)
+                    for tag, s in d_scores.items()
+                }
+                for dataset, d_scores in scores.items()
+            },
             "search_space": {
                 "step_a": {"clipLimit": STEP_A_CLIPS, "tileGridSize": STEP_A_TILE},
                 "step_b": {"clipLimit": step_a_best_clip, "tileGridSize": STEP_B_TILES},
             },
             "results": {
-                dataset: {
-                    tag: metrics
-                    for tag, metrics in data.items()
-                }
+                dataset: {tag: metrics for tag, metrics in data.items()}
                 for dataset, data in all_results.items()
             },
         }
@@ -471,14 +524,41 @@ class ClaheTuningReporter:
         step_a_best_clip: float,
     ) -> None:
         best_tag = _tag(best_clip, best_tile)
+        scores   = self._all_composite_scores(all_results)
+
         print("\n" + "=" * 62)
         print("  CLAHE PARAMETER TUNING — HASIL AKHIR")
         print("=" * 62)
+        print(f"  Scoring : weighted composite  "
+              f"(F1×{SCORING_WEIGHTS['f1']:.0%}  "
+              f"AUC×{SCORING_WEIGHTS['auc']:.0%}  "
+              f"Sens×{SCORING_WEIGHTS['sensitivity']:.0%}  "
+              f"β0×{SCORING_WEIGHTS['betti0_error']:.0%})")
         print(f"  Step A best clipLimit : {step_a_best_clip}  "
               f"(tileGridSize={STEP_A_TILE})")
         print(f"  Rekomendasi akhir     : clipLimit={best_clip}, "
               f"tileGridSize={best_tile}")
+
+        # Composite score ranking table
+        all_tags = sorted(
+            {t for d in DATASETS for t in all_results.get(d, {})},
+        )
+        if all_tags:
+            print()
+            print(f"  {'Kombinasi':<18}  "
+                  f"{'Score DRIVE':>11}  {'Score STARE':>11}  {'Score Avg':>9}")
+            print("  " + "-" * 56)
+            for tag in all_tags:
+                sd = scores.get("drive", {}).get(tag, float('nan'))
+                ss = scores.get("stare", {}).get(tag, float('nan'))
+                avg = (sd + ss) / 2 if not (np.isnan(sd) or np.isnan(ss)) else float('nan')
+                marker = "  ← best" if tag == best_tag else ""
+                print(
+                    f"  {tag:<18}  {sd:>11.4f}  {ss:>11.4f}  {avg:>9.4f}{marker}"
+                )
+
         print()
+        print("  Metrik terpilih pada kombinasi terbaik:")
         for dataset in DATASETS:
             m = all_results[dataset].get(best_tag, {})
             print(
