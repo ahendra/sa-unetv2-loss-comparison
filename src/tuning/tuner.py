@@ -246,10 +246,27 @@ class LossTuner:
     # ── Optuna objective ──────────────────────────────────────────────────────
 
     def _objective(self, trial) -> float:
+        import optuna
         import keras
         from keras.optimizers import Adam
         from keras.callbacks import EarlyStopping
         from src.models import build_sa_unetv2
+
+        class _PruningCB(keras.callbacks.Callback):
+            """Reports -val_loss to Optuna each epoch; stops training if pruned."""
+            def __init__(self, trial_):
+                super().__init__()
+                self._trial = trial_
+                self.pruned = False
+
+            def on_epoch_end(self, epoch, logs=None):
+                val_loss = (logs or {}).get('val_loss')
+                if val_loss is None:
+                    return
+                self._trial.report(-float(val_loss), epoch)
+                if self._trial.should_prune():
+                    self.pruned = True
+                    self.model.stop_training = True
 
         params  = _suggest(trial, self.loss_key)
         loss_fn = _build_loss(self.loss_key, params)
@@ -265,18 +282,29 @@ class LossTuner:
             loss      = loss_fn,
             metrics   = ['accuracy'],
         )
+
+        pruning_cb = _PruningCB(trial)
         model.fit(
             self.x_train, self.y_train,
             validation_data = (self.x_val, self.y_val),
             epochs          = self.n_epochs,
             batch_size      = self.cfg.batch_size,
-            callbacks       = [EarlyStopping(monitor='val_loss',
-                                             patience=_TRIAL_PATIENCE,
-                                             restore_best_weights=True,
-                                             verbose=0)],
+            callbacks       = [
+                EarlyStopping(monitor='val_loss',
+                              patience=_TRIAL_PATIENCE,
+                              restore_best_weights=True,
+                              verbose=0),
+                pruning_cb,
+            ],
             shuffle = True,
             verbose = 0,
         )
+
+        if pruning_cb.pruned:
+            del model
+            gc.collect()
+            keras.backend.clear_session()
+            raise optuna.exceptions.TrialPruned()
 
         y_pred     = model.predict(self.x_val, batch_size=self.cfg.batch_size, verbose=0)
         y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
@@ -312,7 +340,7 @@ class LossTuner:
             load_if_exists = True,          # resume jika study sudah ada di SQLite
             direction   = "maximize",
             sampler     = optuna.samplers.TPESampler(seed=RANDOM_SEED),
-            pruner      = optuna.pruners.MedianPruner(n_startup_trials=5),
+            pruner      = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
         )
 
         finished    = [t for t in study.trials
