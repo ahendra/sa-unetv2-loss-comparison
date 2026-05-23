@@ -251,6 +251,9 @@ class LossTuner:
         from keras.optimizers import Adam
         from keras.callbacks import EarlyStopping
         from src.models import build_sa_unetv2
+        from src.training.trainer import set_global_seed
+
+        set_global_seed()
 
         class _PruningCB(keras.callbacks.Callback):
             """Reports -val_loss to Optuna each epoch; stops training if pruned."""
