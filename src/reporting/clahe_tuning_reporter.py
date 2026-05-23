@@ -33,6 +33,7 @@ from src.data import RetinalAugmentationRunner, DriveDataLoader, StareDataLoader
 from src.evaluation import ModelEvaluator
 from src.losses import get_loss_function
 from src.preprocessing import build_pipeline
+from src.reporting.palette import METRIC_COLORS, METRIC_LABELS
 from src.training import ModelTrainer
 from src.training.trainer import set_global_seed
 
@@ -502,8 +503,9 @@ class ClaheTuningReporter:
 
             is_lower = metric in _LOWER_IS_BETTER
             unit     = "Count (avg/img)" if is_lower else "%"
-            title    = f"{metric}\n(↓ lebih kecil lebih baik)" if is_lower else metric
-            ax.set_title(title, fontsize=9, fontweight='bold', color="#111111")
+            title    = METRIC_LABELS.get(metric, metric)
+            mcolor   = METRIC_COLORS.get(metric, "#111111")
+            ax.set_title(title, fontsize=9, fontweight='bold', color=mcolor)
             ax.set_ylabel(unit, fontsize=8)
             ax.grid(axis="y", alpha=0.3, color="#cccccc")
             ax.spines[["top", "right"]].set_visible(False)

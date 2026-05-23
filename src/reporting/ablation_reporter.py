@@ -8,6 +8,7 @@ from typing import Dict, List, Tuple, Union
 import numpy as np
 
 from config import DriveConfig, LOSS_FUNCTIONS, RESULTS_DIR, WEIGHTS_DIR
+from src.reporting.palette import METRIC_COLORS
 from src.data.augmentation import RetinalAugmentationRunner
 from src.preprocessing import build_pipeline
 
@@ -450,11 +451,12 @@ class AblationReporter:
                 ax.text(i, v + label_offset, f"{v:.2f}",
                         ha="center", va="bottom", fontsize=9, fontweight="bold")
 
+            mcolor = METRIC_COLORS.get(mkey, "#111111")
             if lower_better:
                 ax.set_title(f"{mlabel}\n(↓ lower is better)",
-                             fontsize=9, fontweight="bold")
+                             fontsize=9, fontweight="bold", color=mcolor)
             else:
-                ax.set_title(mlabel, fontsize=10, fontweight="bold")
+                ax.set_title(mlabel, fontsize=10, fontweight="bold", color=mcolor)
 
             ax.set_xticks(range(n_cond))
             ax.set_xticklabels(

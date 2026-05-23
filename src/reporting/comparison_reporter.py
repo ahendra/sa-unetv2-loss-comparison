@@ -5,9 +5,10 @@ from typing import Dict, List, Optional
 import numpy as np
 
 from config import LOSS_FUNCTIONS, RESULTS_DIR
+from .palette import LOSS_COLORS, METRIC_COLORS, METRIC_LABELS
 
 
-_PRIMARY_METRICS = ["f1", "sensitivity", "specificity", "auc", "mcc", "jaccard"]
+_PRIMARY_METRICS = ["accuracy", "f1", "sensitivity", "specificity", "auc", "mcc", "jaccard"]
 _ALL_METRICS     = _PRIMARY_METRICS + ["cldice", "betti0_error", "betti1_error"]
 _LOWER_IS_BETTER = {"betti0_error", "betti1_error"}
 
@@ -88,15 +89,6 @@ class ComparisonReporter:
         angles  = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
         angles += angles[:1]
 
-        # Palette: visually distinct, elegant
-        _COLORS = [
-            "#2176AE",   # biru baja
-            "#E84855",   # merah cerah
-            "#3BB273",   # hijau zamrud
-            "#F4A100",   # kuning amber
-            "#7B2D8B",   # ungu
-            "#00B4D8",   # biru langit
-        ]
         _MARKERS = ['o', 's', '^', 'D', 'v', 'P']
 
         # Per-metric min-max normalisation → [_LO, _HI]
@@ -115,15 +107,9 @@ class ComparisonReporter:
                 t = 1.0 - t                      # invert: low raw = outer ring
             return _LO + t * (_HI - _LO)
 
-        # Spoke labels
+        # Spoke labels (from shared METRIC_LABELS, Betti use multi-line versions)
         _spoke_label = {
-            "f1":           "F1",
-            "sensitivity":  "Sensitivity",
-            "specificity":  "Specificity",
-            "auc":          "AUC",
-            "mcc":          "MCC",
-            "jaccard":      "Jaccard",
-            "cldice":       "clDice",
+            **METRIC_LABELS,
             "betti0_error": "β₀ Error\n(↓ lebih kecil\nlebih baik)",
             "betti1_error": "β₁ Error\n(↓ lebih kecil\nlebih baik)",
         }
@@ -136,7 +122,7 @@ class ComparisonReporter:
         for idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
             if loss_key not in results:
                 continue
-            color     = _COLORS[idx % len(_COLORS)]
+            color     = LOSS_COLORS.get(loss_key, "#aaaaaa")
             marker    = _MARKERS[idx % len(_MARKERS)]
             norm_vals = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
             norm_vals += norm_vals[:1]
@@ -196,17 +182,6 @@ class ComparisonReporter:
 
         # Overlap + topology metrics
         metrics = _ALL_METRICS
-        _metric_labels = {
-            "f1":           "F1",
-            "sensitivity":  "Sensitivity",
-            "specificity":  "Specificity",
-            "auc":          "AUC",
-            "mcc":          "MCC",
-            "jaccard":      "Jaccard",
-            "cldice":       "clDice",
-            "betti0_error": "Betti-0 Error (β₀)\n(↓ lebih kecil = lebih baik)",
-            "betti1_error": "Betti-1 Error (β₁)\n(↓ lebih kecil = lebih baik)",
-        }
         _y_axis_label = {
             "betti0_error": "Error Count",
             "betti1_error": "Error Count",
@@ -215,7 +190,7 @@ class ComparisonReporter:
         loss_keys   = [k for k in LOSS_FUNCTIONS if k in results]
         loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
         n_losses = len(loss_keys)
-        colors   = plt.cm.tab10(np.linspace(0, 1, n_losses))
+        colors   = [LOSS_COLORS.get(k, "#aaaaaa") for k in loss_keys]
 
         n_cols = 3
         n_rows = (len(metrics) + n_cols - 1) // n_cols
@@ -232,7 +207,8 @@ class ComparisonReporter:
 
         for m_idx, mkey in enumerate(metrics):
             ax     = axes_flat[m_idx]
-            mlabel = _metric_labels.get(mkey, mkey.upper())
+            mlabel = METRIC_LABELS.get(mkey, mkey.upper())
+            mcolor = METRIC_COLORS.get(mkey, "#111111")
             vals   = [results[k].get(mkey, 0) for k in loss_keys]
             lower_better = mkey in _LOWER_IS_BETTER
 
@@ -259,7 +235,7 @@ class ComparisonReporter:
             ax.set_xticks(range(n_losses))
             ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=8)
             ax.set_ylabel(_y_axis_label.get(mkey, "Score (%)"), fontsize=9)
-            ax.set_title(mlabel, fontsize=10, fontweight="bold")
+            ax.set_title(mlabel, fontsize=10, fontweight="bold", color=mcolor)
             ax.set_xlim(-0.6, n_losses - 0.4)
             ax.set_ylim(y_min, y_max)
             ax.grid(axis="y", alpha=0.3)
@@ -451,8 +427,8 @@ class ComparisonReporter:
             return None
 
         # Overlap metrics (higher=better) + topology metrics (lower=better)
-        _TEST_METRICS        = ["f1", "sensitivity", "specificity", "auc", "jaccard",
-                                "cldice", "betti0_error", "betti1_error"]
+        _TEST_METRICS        = ["accuracy", "f1", "sensitivity", "specificity", "auc",
+                                "jaccard", "cldice", "betti0_error", "betti1_error"]
         _LOWER_IS_BETTER_SET = {"betti0_error", "betti1_error"}
 
         # Only include losses that have per_image_metrics
@@ -515,6 +491,7 @@ class ComparisonReporter:
         # ── Save TXT summary ───────────────────────────────────────────────────
         txt_path = self._out_dir / f"wilcoxon_{dataset}.txt"
         _metric_note = {
+            "accuracy":     "Overlap  | higher=better",
             "f1":           "Overlap  | higher=better",
             "sensitivity":  "Overlap  | higher=better",
             "specificity":  "Overlap  | higher=better",

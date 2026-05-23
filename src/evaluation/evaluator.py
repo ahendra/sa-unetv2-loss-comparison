@@ -227,9 +227,9 @@ class ModelEvaluator:
             for k, v in metrics.items()
         }
         # Per-image metrics for Wilcoxon signed-rank test (Sub-bab 4.7.5)
-        # Overlap metrics (higher=better): f1, sensitivity, specificity, auc, jaccard, cldice
+        # Overlap metrics (higher=better): accuracy, f1, sensitivity, specificity, auc, jaccard, cldice
         # Topology metrics (lower=better): betti0_error, betti1_error
-        _wilcoxon_overlap  = {"f1", "sensitivity", "specificity", "auc", "jaccard", "cldice"}
+        _wilcoxon_overlap  = {"accuracy", "f1", "sensitivity", "specificity", "auc", "jaccard", "cldice"}
         _wilcoxon_topology = {"betti0_error", "betti1_error"}
         _wilcoxon_keys     = _wilcoxon_overlap | _wilcoxon_topology
         if per_image:
