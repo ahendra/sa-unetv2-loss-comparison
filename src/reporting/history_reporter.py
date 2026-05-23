@@ -73,10 +73,8 @@ class HistoryReporter:
         ax.set_title(f"Training History — {loss_label} ({self._cfg.name})")
         ax.set_xlabel("Epoch")
         ax.set_ylabel("Loss")
-        # Legend placed just outside the right edge of the axes — no overlap with curves.
-        # bbox_inches="tight" captures it in the saved PNG.
-        ax.legend(fontsize=9, loc="upper left", bbox_to_anchor=(1.02, 1.0),
-                  borderaxespad=0, framealpha=0.9)
+        ax.legend(fontsize=9, loc="upper right", framealpha=0.92,
+                  edgecolor="#cccccc")
         ax.grid(alpha=0.3)
 
         self._out_dir.mkdir(parents=True, exist_ok=True)

@@ -304,6 +304,11 @@ class LossTuner:
         )
 
         if pruning_cb.pruned:
+            y_pred     = model.predict(self.x_val, batch_size=self.cfg.batch_size, verbose=0)
+            y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
+            y_true_bin = (self.y_val.ravel() > 0.5).astype(np.uint8)
+            pruned_f1  = float(f1_score(y_true_bin, y_pred_bin, zero_division=0))
+            trial.set_user_attr("pruned_f1", pruned_f1)
             del model
             gc.collect()
             keras.backend.clear_session()
@@ -326,7 +331,8 @@ class LossTuner:
     def _on_trial_end(self, study, trial) -> None:
         import optuna
         if trial.state == optuna.trial.TrialState.PRUNED:
-            val = "pruned"
+            pf1 = trial.user_attrs.get("pruned_f1")
+            val = f"pruned(F1={pf1:.6f})" if pf1 is not None else "pruned"
         elif trial.value is not None:
             val = f"{trial.value:.6f}"
         else:
@@ -349,7 +355,7 @@ class LossTuner:
             load_if_exists = True,          # resume jika study sudah ada di SQLite
             direction   = "maximize",
             sampler     = optuna.samplers.TPESampler(seed=RANDOM_SEED),
-            pruner      = optuna.pruners.MedianPruner(n_startup_trials=5, n_warmup_steps=5),
+            pruner      = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=15, interval_steps=5),
         )
 
         finished    = [t for t in study.trials
@@ -404,7 +410,7 @@ class LossTuner:
             "all_trials": [
                 {
                     "number": t.number,
-                    "f1"    : t.value if t.state.name == "COMPLETE" else None,
+                    "f1"    : t.value if t.state.name == "COMPLETE" else t.user_attrs.get("pruned_f1"),
                     "params": t.params,
                     "state" : t.state.name,
                 }
@@ -428,7 +434,6 @@ class LossTuner:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
-            import matplotlib.gridspec as gridspec
         except ImportError:
             print("  [WARN] matplotlib tidak terinstall, skip plot.")
             return
@@ -440,43 +445,61 @@ class LossTuner:
         if not trials:
             return
 
-        f1_vals    = [t.value for t in trials]
-        best_curve = [max(f1_vals[:i + 1]) for i in range(len(f1_vals))]
-        trial_nums = [t.number for t in trials]
+        # ── Shared data ───────────────────────────────────────────────────────
+        f1_vals     = [t.value for t in trials]
+        best_curve  = [max(f1_vals[:i + 1]) for i in range(len(f1_vals))]
+        trial_nums  = [t.number for t in trials]
         pruned_nums = [t.number for t in pruned_trials]
+        pruned_f1s  = [t.user_attrs.get("pruned_f1", 0.0) for t in pruned_trials]
         param_names = list(study.best_trial.params.keys())
-        n_params   = len(param_names)
-        n_cols     = min(n_params, 3) if n_params else 1
-        n_prows    = (n_params + n_cols - 1) // n_cols if n_params else 0
-        total_rows = 2 + n_prows
+        n_params    = len(param_names)
+        n_cols      = min(n_params, 3) if n_params else 1
+
+        all_f1_for_cmap = f1_vals + [v for v in pruned_f1s if v > 0.0]
+        vmin_f1 = min(all_f1_for_cmap) if all_f1_for_cmap else 0.0
+        vmax_f1 = max(all_f1_for_cmap) if all_f1_for_cmap else 1.0
+        _CMAP   = "RdYlGn"
+        best_t  = study.best_trial
 
         n_pruned_str = f"  |  Pruned: {len(pruned_trials)}" if pruned_trials else ""
-        fig = plt.figure(figsize=(14, 4 * total_rows))
-        fig.suptitle(
+        _suptitle = (
             f"Hyperparameter Tuning — {self.loss_key.upper()} ({self.cfg.name})\n"
-            f"Best F1: {study.best_value:.6f}  |  Complete: {len(trials)}{n_pruned_str}",
-            fontsize=12, fontweight="bold",
+            f"Best F1: {study.best_value:.6f}  |  Complete: {len(trials)}{n_pruned_str}"
         )
-        gs = gridspec.GridSpec(total_rows, n_cols,
-                               figure=fig, hspace=0.55, wspace=0.4)
 
-        # ── Row 0: Optimization history ───────────────────────────────────────
-        ax0 = fig.add_subplot(gs[0, :])
-        ax0.scatter(trial_nums, f1_vals, c="steelblue", s=35, alpha=0.7,
-                    label="Trial F1", zorder=3)
+        # ── Figure 1: Optimization History ────────────────────────────────────
+        fig1, ax0 = plt.subplots(figsize=(12, 5))
+        fig1.suptitle(_suptitle, fontsize=11, fontweight="bold")
+        sc0 = ax0.scatter(trial_nums, f1_vals, c=f1_vals, cmap=_CMAP,
+                          vmin=vmin_f1, vmax=vmax_f1, s=45, alpha=0.85,
+                          label="Complete (○)", zorder=3)
         if pruned_nums:
-            ax0.scatter(pruned_nums, [0.0] * len(pruned_nums),
-                        marker="x", c="gray", s=50, linewidths=1.5,
-                        alpha=0.6, label="Pruned", zorder=2)
-        ax0.plot(trial_nums, best_curve, "r-", lw=2, label="Best so far")
-        ax0.axhline(study.best_value, color="darkred", ls="--",
+            ax0.scatter(pruned_nums, pruned_f1s, c=pruned_f1s, cmap=_CMAP,
+                        vmin=vmin_f1, vmax=vmax_f1,
+                        marker="x", s=60, linewidths=1.8,
+                        alpha=0.75, label="Pruned (×)", zorder=2)
+        ax0.scatter([best_t.number], [study.best_value],
+                    c=[study.best_value], cmap=_CMAP, vmin=vmin_f1, vmax=vmax_f1,
+                    marker="*", s=280, zorder=6,
+                    edgecolors="navy", linewidths=0.8,
+                    label=f"Best ★ (trial #{best_t.number})")
+        ax0.plot(trial_nums, best_curve, color="navy", lw=2, label="Best so far")
+        ax0.axhline(study.best_value, color="navy", ls="--", alpha=0.6,
                     label=f"Best: {study.best_value:.6f}")
+        cb0 = plt.colorbar(sc0, ax=ax0, pad=0.01)
+        cb0.set_label("F1 Score", fontsize=9)
         ax0.set_xlabel("Trial"); ax0.set_ylabel("F1 Score")
         ax0.set_title("Optimization History")
         ax0.legend(fontsize=9); ax0.grid(alpha=0.3)
+        fig1.tight_layout()
+        path1 = self.out_dir / f"{self.loss_key}_tuning_history.png"
+        fig1.savefig(str(path1), dpi=150, bbox_inches="tight")
+        plt.close(fig1)
+        print(f"  Grafik history    : {path1}")
 
-        # ── Row 1: Parameter importance ───────────────────────────────────────
-        ax1 = fig.add_subplot(gs[1, :])
+        # ── Figure 2: Parameter Importance ────────────────────────────────────
+        fig2, ax1 = plt.subplots(figsize=(8, max(3, n_params * 0.8 + 1.5)))
+        fig2.suptitle(_suptitle, fontsize=11, fontweight="bold")
         try:
             imp   = optuna.importance.get_param_importances(study)
             names = list(imp.keys())
@@ -485,7 +508,7 @@ class LossTuner:
             for bar, v in zip(bars, vals):
                 ax1.text(bar.get_width() + 0.005,
                          bar.get_y() + bar.get_height() / 2,
-                         f"{v:.3f}", va="center", fontsize=8)
+                         f"{v:.3f}", va="center", fontsize=9)
             ax1.set_xlabel("Importance (fANOVA)")
             ax1.grid(axis="x", alpha=0.3)
         except Exception:
@@ -493,29 +516,62 @@ class LossTuner:
                      "Insufficient data for importance analysis\n(tambah jumlah trials)",
                      ha="center", va="center",
                      transform=ax1.transAxes, fontsize=10)
-        ax1.set_title("Parameter Importance")
+        ax1.set_title("Parameter Importance (fANOVA)")
+        fig2.tight_layout()
+        path2 = self.out_dir / f"{self.loss_key}_tuning_importance.png"
+        fig2.savefig(str(path2), dpi=150, bbox_inches="tight")
+        plt.close(fig2)
+        print(f"  Grafik importance : {path2}")
 
-        # ── Rows 2+: Per-parameter scatter ────────────────────────────────────
-        for i, param in enumerate(param_names):
-            ax = fig.add_subplot(gs[2 + i // n_cols, i % n_cols])
-            pvals = [t.params[param] for t in trials]
-            ax.scatter(pvals, f1_vals, c="steelblue", s=25, alpha=0.7, label="Complete")
-            if pruned_trials:
-                pruned_pvals = [t.params[param] for t in pruned_trials if param in t.params]
-                if pruned_pvals:
-                    ax.scatter(pruned_pvals, [0.0] * len(pruned_pvals),
-                               marker="x", c="gray", s=40, linewidths=1.2,
-                               alpha=0.6, label="Pruned")
-            bv = study.best_trial.params[param]
-            ax.axvline(bv, color="red", ls="--", lw=1.5, label=f"Best={bv:.4g}")
-            ax.legend(fontsize=8)
-            ax.set_xlabel(param); ax.set_ylabel("F1")
-            ax.set_title(f"{param} vs F1"); ax.grid(alpha=0.3)
+        # ── Figure 3: Per-parameter Scatter ───────────────────────────────────
+        if n_params > 0:
+            n_prows  = (n_params + n_cols - 1) // n_cols
+            fig3, axes3 = plt.subplots(
+                n_prows, n_cols,
+                figsize=(5 * n_cols, 4.5 * n_prows),
+                gridspec_kw={"hspace": 0.55, "wspace": 0.45},
+                squeeze=False,
+            )
+            fig3.suptitle(_suptitle, fontsize=11, fontweight="bold")
+            axes3_flat = axes3.flatten()
 
-        plot_path = self.out_dir / f"{self.loss_key}_tuning.png"
-        fig.savefig(str(plot_path), dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"  Grafik  : {plot_path}")
+            for i, param in enumerate(param_names):
+                ax = axes3_flat[i]
+                pvals = [t.params[param] for t in trials]
+                sc_p = ax.scatter(pvals, f1_vals, c=f1_vals, cmap=_CMAP,
+                                  vmin=vmin_f1, vmax=vmax_f1, s=30, alpha=0.85,
+                                  label="Complete (○)")
+                if pruned_trials:
+                    pruned_param_pairs = [
+                        (t.params[param], t.user_attrs.get("pruned_f1", 0.0))
+                        for t in pruned_trials if param in t.params
+                    ]
+                    if pruned_param_pairs:
+                        pp_x, pp_y = zip(*pruned_param_pairs)
+                        ax.scatter(pp_x, list(pp_y), c=list(pp_y), cmap=_CMAP,
+                                   vmin=vmin_f1, vmax=vmax_f1,
+                                   marker="x", s=40, linewidths=1.2,
+                                   alpha=0.75, label="Pruned (×)")
+                bv = best_t.params[param]
+                ax.scatter([bv], [best_t.value],
+                           c=[best_t.value], cmap=_CMAP, vmin=vmin_f1, vmax=vmax_f1,
+                           marker="*", s=220, zorder=6,
+                           edgecolors="navy", linewidths=0.8,
+                           label="Best (★)")
+                ax.axvline(bv, color="navy", ls="--", lw=1.5, label=f"Best={bv:.4g}")
+                cb_p = plt.colorbar(sc_p, ax=ax, pad=0.01)
+                cb_p.set_label("F1", fontsize=8)
+                ax.legend(fontsize=8)
+                ax.set_xlabel(param); ax.set_ylabel("F1")
+                ax.set_title(f"{param} vs F1"); ax.grid(alpha=0.3)
+
+            for idx in range(n_params, len(axes3_flat)):
+                axes3_flat[idx].axis("off")
+
+            path3 = self.out_dir / f"{self.loss_key}_tuning_scatter.png"
+            fig3.savefig(str(path3), dpi=150, bbox_inches="tight")
+            plt.close(fig3)
+            print(f"  Grafik scatter    : {path3}")
 
     # ── Summary ───────────────────────────────────────────────────────────────
 

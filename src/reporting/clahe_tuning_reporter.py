@@ -433,15 +433,40 @@ class ClaheTuningReporter:
             return
 
         tags      = list(results.keys())
+        n_tags    = len(tags)
         n_metrics = len(_METRIC_KEYS)
         n_cols    = 4
         n_rows    = (n_metrics + n_cols - 1) // n_cols
 
-        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows))
-        axes_flat = axes.flatten()
+        # Palette: distinct elegant colors — NO red (reserved for nothing,
+        # best bar uses gold so it never clashes with any regular bar).
+        _PALETTE = [
+            "#2176AE",  # steel blue
+            "#3BB273",  # emerald green
+            "#7B2D8B",  # purple
+            "#00B4D8",  # sky blue
+            "#546E7A",  # slate gray-blue
+            "#00897B",  # teal
+            "#F06292",  # rose pink
+            "#8D6E63",  # warm taupe
+            "#78909C",  # cool gray
+            "#66BB6A",  # light green
+        ]
+        _BEST_COLOR   = "#F4A100"   # amber gold — unique, not in palette
+        _BEST_EDGE    = "#B37200"   # darker gold for border
+        _NORMAL_EDGE  = "#ffffff"
 
-        cmap      = plt.cm.tab10(np.linspace(0, 0.9, len(tags)))
-        best_tag  = _tag(best_clip, best_tile)
+        best_tag = _tag(best_clip, best_tile)
+
+        # Assign one palette color per tag (excluding best_tag slot —
+        # best_tag always gets gold regardless of position).
+        palette_iter = iter(_PALETTE)
+        tag_colors: Dict[str, str] = {}
+        for t in tags:
+            if t == best_tag:
+                tag_colors[t] = _BEST_COLOR
+            else:
+                tag_colors[t] = next(palette_iter, "#aaaaaa")
 
         # Short x-tick labels: "c=1.5\nt=8"
         xlabels = [
@@ -449,43 +474,59 @@ class ClaheTuningReporter:
             for t in tags
         ]
 
+        fig, axes = plt.subplots(n_rows, n_cols, figsize=(5 * n_cols, 4 * n_rows),
+                                 gridspec_kw={"hspace": 0.65, "wspace": 0.35})
+        axes_flat = axes.flatten()
+        fig.patch.set_facecolor("#ffffff")
+
         for ax_i, metric in enumerate(_METRIC_KEYS):
             ax   = axes_flat[ax_i]
             vals = [results.get(t, {}).get(metric, float('nan')) for t in tags]
 
-            bar_colors = [
-                '#d62728' if t == best_tag else tuple(cmap[i])
-                for i, t in enumerate(tags)
-            ]
-            bars = ax.bar(
-                range(len(tags)), vals,
-                color=bar_colors, edgecolor='white', linewidth=0.5,
-            )
+            bar_colors  = [tag_colors[t] for t in tags]
+            edge_colors = [_BEST_EDGE if t == best_tag else _NORMAL_EDGE
+                           for t in tags]
+            edge_widths = [2.0 if t == best_tag else 0.5 for t in tags]
 
-            ax.set_xticks(range(len(tags)))
-            ax.set_xticklabels(xlabels, fontsize=7, rotation=30, ha='right')
+            bars = ax.bar(
+                range(n_tags), vals,
+                color=bar_colors,
+                edgecolor=edge_colors,
+                linewidth=edge_widths,
+                width=0.65,
+            )
+            ax.set_facecolor("#f8f9fa")
+
+            ax.set_xticks(range(n_tags))
+            ax.set_xticklabels(xlabels, fontsize=7.5, rotation=30, ha='right')
 
             is_lower = metric in _LOWER_IS_BETTER
             unit     = "Count (avg/img)" if is_lower else "%"
-            title    = f"{metric}\n(↓ lower is better)" if is_lower else metric
-            ax.set_title(title, fontsize=9, fontweight='bold')
+            title    = f"{metric}\n(↓ lebih kecil lebih baik)" if is_lower else metric
+            ax.set_title(title, fontsize=9, fontweight='bold', color="#111111")
             ax.set_ylabel(unit, fontsize=8)
+            ax.grid(axis="y", alpha=0.3, color="#cccccc")
+            ax.spines[["top", "right"]].set_visible(False)
 
-            # Zoom y-axis so small differences are visible
+            # Zoom y-axis
             valid = [v for v in vals if not np.isnan(v)]
             if valid:
                 lo, hi = min(valid), max(valid)
                 pad = (hi - lo) * 0.35 if hi > lo else max(abs(hi) * 0.05, 0.5)
                 ax.set_ylim(max(0, lo - pad), hi + pad)
 
-            # Value annotations
-            for bar, v in zip(bars, vals):
+            # Value annotations + star for best
+            for bar, v, t in zip(bars, vals, tags):
                 if not np.isnan(v):
+                    label = f"★ {v:.2f}" if t == best_tag else f"{v:.2f}"
+                    color = _BEST_EDGE   if t == best_tag else "#333333"
                     ax.text(
                         bar.get_x() + bar.get_width() / 2,
                         bar.get_height(),
-                        f"{v:.2f}",
-                        ha='center', va='bottom', fontsize=7,
+                        label,
+                        ha='center', va='bottom',
+                        fontsize=7, fontweight='bold' if t == best_tag else 'normal',
+                        color=color,
                     )
 
         for ax in axes_flat[n_metrics:]:
@@ -493,14 +534,14 @@ class ClaheTuningReporter:
 
         fig.suptitle(
             f"CLAHE Parameter Tuning — {dataset.upper()}\n"
-            f"Best: clipLimit={best_clip}, tileGridSize={best_tile}  "
-            f"(merah = kombinasi terpilih)",
-            fontsize=12, fontweight='bold',
+            f"Best: clipLimit={best_clip}, tileGridSize={best_tile}"
+            f"  (★ = kombinasi terpilih)",
+            fontsize=12, fontweight='bold', color="#111111",
         )
-        fig.tight_layout()
 
         path = self.out_dir / f"clahe_tuning_{dataset}.png"
-        fig.savefig(path, dpi=150, bbox_inches='tight')
+        fig.savefig(path, dpi=150, bbox_inches='tight',
+                    facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Chart tersimpan: {path}")
 

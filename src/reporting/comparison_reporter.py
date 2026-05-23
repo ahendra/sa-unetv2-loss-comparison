@@ -57,6 +57,7 @@ class ComparisonReporter:
         paths["bar"]       = self._plot_bar(results, dataset)
         paths["confusion"] = self._plot_confusion_matrices(results, dataset)
         paths["ranking"]   = self._save_ranking(results, dataset)
+        paths["wilcoxon"]  = self._run_wilcoxon_test(results, dataset)
         return paths
 
     # ── Loaders ──────────────────────────────────────────────────────────────
@@ -81,77 +82,104 @@ class ComparisonReporter:
             print("  [WARN] matplotlib tidak terinstall, skip radar chart.")
             return None
 
-        metrics = _PRIMARY_METRICS
+        # Overlap + topology metrics; Betti errors inverted (lower raw = outer ring)
+        metrics = _ALL_METRICS
         n_m     = len(metrics)
         angles  = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
         angles += angles[:1]
 
-        fig, ax = plt.subplots(figsize=(9, 10), subplot_kw=dict(polar=True))
-        colors       = plt.cm.tab10(np.linspace(0, 1, len(LOSS_FUNCTIONS)))
-        linestyles   = ['-', '--', '-.', ':', (0, (3, 1, 1, 1)), (0, (5, 2))]
-        markerstyles = ['o', 's', '^', 'D', 'v', 'P']
+        # Palette: visually distinct, elegant
+        _COLORS = [
+            "#2176AE",   # biru baja
+            "#E84855",   # merah cerah
+            "#3BB273",   # hijau zamrud
+            "#F4A100",   # kuning amber
+            "#7B2D8B",   # ungu
+            "#00B4D8",   # biru langit
+        ]
+        _MARKERS = ['o', 's', '^', 'D', 'v', 'P']
 
-        # Per-metric min-max normalization: each spoke independently stretched
-        # to [_LO, _HI] so even sub-0.1% differences become clearly visible.
-        # Actual value ranges are shown in the spoke labels below.
-        _LO, _HI = 0.15, 0.90
+        # Per-metric min-max normalisation → [_LO, _HI]
+        # Betti errors inverted so that outer ring always = better for all metrics.
+        _LO, _HI = 0.08, 0.92
         metric_stats: Dict[str, tuple] = {}
         for m in metrics:
-            vals_m = [results[k].get(m, 0) / 100.0
-                      for k in LOSS_FUNCTIONS if k in results]
+            vals_m = [results[k].get(m, 0) for k in LOSS_FUNCTIONS if k in results]
             metric_stats[m] = (min(vals_m), max(vals_m))
 
-        def _norm(val_pct: float, m: str) -> float:
-            raw = val_pct / 100.0
+        def _norm(val_raw: float, m: str) -> float:
             lo, hi = metric_stats[m]
             rng = (hi - lo) if (hi - lo) > 1e-9 else 1e-9
-            return _LO + (raw - lo) / rng * (_HI - _LO)
+            t   = (val_raw - lo) / rng          # 0.0 (lo) → 1.0 (hi)
+            if m in _LOWER_IS_BETTER:
+                t = 1.0 - t                      # invert: low raw = outer ring
+            return _LO + t * (_HI - _LO)
 
-        for idx, ((loss_key, loss_label), color) in enumerate(
-                zip(LOSS_FUNCTIONS.items(), colors)):
+        # Spoke labels
+        _spoke_label = {
+            "f1":           "F1",
+            "sensitivity":  "Sensitivity",
+            "specificity":  "Specificity",
+            "auc":          "AUC",
+            "mcc":          "MCC",
+            "jaccard":      "Jaccard",
+            "cldice":       "clDice",
+            "betti0_error": "β₀ Error\n(↓ lebih kecil\nlebih baik)",
+            "betti1_error": "β₁ Error\n(↓ lebih kecil\nlebih baik)",
+        }
+        spoke_labels = [_spoke_label.get(m, m.upper()) for m in metrics]
+
+        fig, ax = plt.subplots(figsize=(11, 12), subplot_kw=dict(polar=True))
+        fig.patch.set_facecolor("#ffffff")
+        ax.set_facecolor("#f8f9fa")
+
+        for idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
             if loss_key not in results:
                 continue
-            norm_vals  = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
+            color     = _COLORS[idx % len(_COLORS)]
+            marker    = _MARKERS[idx % len(_MARKERS)]
+            norm_vals = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
             norm_vals += norm_vals[:1]
             ax.plot(angles, norm_vals,
-                    color=color, lw=2.0,
-                    linestyle=linestyles[idx % len(linestyles)],
-                    marker=markerstyles[idx % len(markerstyles)],
-                    markersize=6,
-                    label=loss_label.replace(" (Baseline)", ""))
-            ax.fill(angles, norm_vals, color=color, alpha=0.04)
+                    color=color, lw=2.2, linestyle="-",
+                    marker=marker, markersize=7, markerfacecolor=color,
+                    markeredgecolor="white", markeredgewidth=0.8,
+                    label=loss_label.replace(" (Baseline)", ""),
+                    zorder=3)
+            ax.fill(angles, norm_vals, color=color, alpha=0.05, zorder=2)
 
-        # Radial ticks: relative labels (min → max per spoke)
+        # Radial grid rings
         r_ticks = np.linspace(_LO, _HI, 5)
         ax.set_ylim(0.0, 1.0)
         ax.set_yticks(r_ticks.tolist())
-        ax.set_yticklabels(["min", "25%", "50%", "75%", "max"],
-                           fontsize=7, color="gray")
+        ax.set_yticklabels(["Terburuk", "", "", "", "Terbaik"],
+                           fontsize=7, color="#888888")
+        ax.yaxis.set_tick_params(pad=6)
 
-        # Spoke labels: metric name + actual [min–max] range in the data
-        spoke_labels = [
-            f"{m.upper()}\n"
-            f"[{metric_stats[m][0]*100:.2f}–{metric_stats[m][1]*100:.2f}%]"
-            for m in metrics
-        ]
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(spoke_labels, fontsize=8)
+        ax.set_xticklabels(spoke_labels, fontsize=9, color="#222222")
+
+        # Spoke grid: slightly darker than default
+        ax.grid(color="#cccccc", linestyle="-", linewidth=0.6, alpha=0.8)
+        ax.spines["polar"].set_color("#cccccc")
 
         ax.set_title(
-            f"Loss Function Comparison — {dataset.upper()}\n"
-            f"Skala relatif per metrik  |  [min – max] = rentang nilai aktual",
-            fontsize=11, fontweight="bold", pad=25,
+            f"Loss Function Comparison — {dataset.upper()}",
+            fontsize=12, fontweight="bold", pad=30, color="#111111",
         )
+
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(
             handles, labels,
-            loc="lower center", ncol=2,
+            loc="lower center", ncol=3,
             bbox_to_anchor=(0.5, 0.01),
-            fontsize=9, framealpha=0.9,
+            fontsize=9.5, framealpha=0.95,
+            edgecolor="#dddddd",
         )
 
         path = self._out_dir / f"radar_chart_{dataset}.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        fig.savefig(str(path), dpi=150, bbox_inches="tight",
+                    facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Radar chart: {path}")
         return path
@@ -166,80 +194,86 @@ class ComparisonReporter:
         except ImportError:
             return None
 
-        metrics       = _PRIMARY_METRICS
-        metric_labels = ["F1", "Sensitivity", "Specificity", "AUC", "MCC", "Jaccard"]
-        loss_keys     = [k for k in LOSS_FUNCTIONS if k in results]
-        loss_labels   = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
+        # Overlap + topology metrics
+        metrics = _ALL_METRICS
+        _metric_labels = {
+            "f1":           "F1",
+            "sensitivity":  "Sensitivity",
+            "specificity":  "Specificity",
+            "auc":          "AUC",
+            "mcc":          "MCC",
+            "jaccard":      "Jaccard",
+            "cldice":       "clDice",
+            "betti0_error": "Betti-0 Error (β₀)\n(↓ lebih kecil = lebih baik)",
+            "betti1_error": "Betti-1 Error (β₁)\n(↓ lebih kecil = lebih baik)",
+        }
+        _y_axis_label = {
+            "betti0_error": "Error Count",
+            "betti1_error": "Error Count",
+        }
+
+        loss_keys   = [k for k in LOSS_FUNCTIONS if k in results]
+        loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
         n_losses = len(loss_keys)
         colors   = plt.cm.tab10(np.linspace(0, 1, n_losses))
 
-        # One subplot per metric — each gets its own zoomed y-axis so even
-        # sub-1% differences between loss functions are clearly visible.
         n_cols = 3
         n_rows = (len(metrics) + n_cols - 1) // n_cols
         fig, axes = plt.subplots(
             n_rows, n_cols,
-            figsize=(16, 5 * n_rows),
-            gridspec_kw={"hspace": 0.60, "wspace": 0.35},
+            figsize=(16, 6 * n_rows),
+            gridspec_kw={"hspace": 0.80, "wspace": 0.40},
         )
         fig.suptitle(
-            f"Loss Function Comparison — {dataset.upper()}\n"
-            f"(sumbu-Y diperbesar per subplot  |  ╱╲ = axis tidak mulai dari nol)",
+            f"Loss Function Comparison — {dataset.upper()}",
             fontsize=12, fontweight="bold",
         )
         axes_flat = np.array(axes).flatten()
 
-        for m_idx, (mkey, mlabel) in enumerate(zip(metrics, metric_labels)):
-            ax   = axes_flat[m_idx]
-            vals = [results[k].get(mkey, 0) for k in loss_keys]
+        for m_idx, mkey in enumerate(metrics):
+            ax     = axes_flat[m_idx]
+            mlabel = _metric_labels.get(mkey, mkey.upper())
+            vals   = [results[k].get(mkey, 0) for k in loss_keys]
+            lower_better = mkey in _LOWER_IS_BETTER
 
             v_min = min(vals)
             v_max = max(vals)
             span  = (v_max - v_min) if (v_max - v_min) > 1e-9 else 0.02
 
-            # Tight zoom: pad only 40% below and 60% above the data range
-            # so bars fill most of the subplot and small differences are visible
-            y_min = max(0.0,   v_min - span * 0.4)
-            y_max = min(100.0, v_max + span * 0.6)
+            y_min = max(0.0, v_min - span * 0.4)
+            y_max = v_max + span * 0.6
+            if not lower_better:
+                y_max = min(100.0, y_max)
             if (y_max - y_min) < 0.01:
-                y_min = max(0.0,   v_min - 0.05)
-                y_max = min(100.0, v_max + 0.05)
+                y_min = max(0.0, v_min - 0.05)
+                y_max = v_max + 0.05
             label_offset = (y_max - y_min) * 0.02
 
-            for i, (k, label, color) in enumerate(zip(loss_keys, loss_labels, colors)):
+            for i, (k, color) in enumerate(zip(loss_keys, colors)):
                 v = results[k].get(mkey, 0)
                 ax.bar(i, v, width=0.65, color=color, alpha=0.85,
-                       edgecolor="white", label=label)
+                       edgecolor="white", label=loss_labels[i])
                 ax.text(i, v + label_offset, f"{v:.2f}",
                         ha="center", va="bottom", fontsize=7, rotation=45)
 
-            ax.set_xticks([])
-            ax.set_ylabel("Score (%)", fontsize=9)
+            ax.set_xticks(range(n_losses))
+            ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=8)
+            ax.set_ylabel(_y_axis_label.get(mkey, "Score (%)"), fontsize=9)
             ax.set_title(mlabel, fontsize=10, fontweight="bold")
             ax.set_xlim(-0.6, n_losses - 0.4)
             ax.set_ylim(y_min, y_max)
             ax.grid(axis="y", alpha=0.3)
 
-            # Axis-break indicator when y-axis doesn't start from zero
-            if y_min > 0:
-                ax.spines["bottom"].set_linewidth(0)
-                ax.tick_params(bottom=False)
-                d  = 0.012
-                kw = dict(transform=ax.transAxes, color="black",
-                          clip_on=False, lw=1.5)
-                ax.plot((-d, +d), (-2 * d, +2 * d), **kw)
-                ax.plot((1 - d, 1 + d), (-2 * d, +2 * d), **kw)
-
         # Hide unused panels
         for idx in range(len(metrics), len(axes_flat)):
             axes_flat[idx].axis("off")
 
-        # Single figure-level legend below all subplots — no overlap risk
+        # Single figure-level legend below all subplots
         handles, labels = axes_flat[0].get_legend_handles_labels()
         fig.legend(
             handles, labels,
             loc="lower center", ncol=min(n_losses, 3),
-            bbox_to_anchor=(0.5, -0.03),
+            bbox_to_anchor=(0.5, -0.02),
             fontsize=9, framealpha=0.9,
         )
 
@@ -395,6 +429,209 @@ class ComparisonReporter:
         plt.close(fig)
         print(f"  Confusion matrix: {path}")
         return path
+
+    # ── Wilcoxon signed-rank test (Sub-bab 4.7.5) ────────────────────────────
+
+    def _run_wilcoxon_test(self, results: Dict, dataset: str) -> Optional[Path]:
+        """Pairwise Wilcoxon signed-rank test across all loss function pairs.
+
+        Requires per_image_metrics in each *_results.json (saved by evaluator
+        when evaluate() is run after the evaluator update). If data is missing,
+        prints a warning and returns None.
+
+        Outputs:
+          - wilcoxon_<dataset>.json  — full p-value matrix per metric
+          - wilcoxon_<dataset>.txt   — human-readable summary table
+          - wilcoxon_heatmap_<dataset>.png — p-value heatmap (F1)
+        """
+        try:
+            from scipy import stats as scipy_stats
+        except ImportError:
+            print("  [WARN] scipy tidak terinstall, skip Wilcoxon test.")
+            return None
+
+        # Overlap metrics (higher=better) + topology metrics (lower=better)
+        _TEST_METRICS        = ["f1", "sensitivity", "specificity", "auc", "jaccard",
+                                "cldice", "betti0_error", "betti1_error"]
+        _LOWER_IS_BETTER_SET = {"betti0_error", "betti1_error"}
+
+        # Only include losses that have per_image_metrics
+        loss_keys = [
+            k for k in LOSS_FUNCTIONS
+            if k in results and "per_image_metrics" in results[k]
+        ]
+        if len(loss_keys) < 2:
+            print(
+                "  [INFO] Wilcoxon test: per_image_metrics belum tersedia. "
+                "Re-run evaluasi untuk mendapatkan data per-gambar."
+            )
+            return None
+
+        n = len(loss_keys)
+        wilcoxon_output: Dict = {"dataset": dataset, "metrics": {}}
+
+        for metric in _TEST_METRICS:
+            pairs: Dict = {}
+            for k1 in loss_keys:
+                for k2 in loss_keys:
+                    if k1 >= k2:
+                        continue
+                    x = [m[metric] for m in results[k1]["per_image_metrics"]
+                         if metric in m]
+                    y = [m[metric] for m in results[k2]["per_image_metrics"]
+                         if metric in m]
+                    if len(x) != len(y) or len(x) < 5:
+                        continue
+                    diffs = [xi - yi for xi, yi in zip(x, y)]
+                    if all(d == 0 for d in diffs):
+                        # Semua gambar identik — topologi sempurna di kedua loss
+                        pairs[f"{k1}_vs_{k2}"] = {
+                            "p_value": None,
+                            "significant_005": False,
+                            "note": "all_differences_zero",
+                        }
+                        continue
+                    try:
+                        stat, p = scipy_stats.wilcoxon(x, y)
+                        pairs[f"{k1}_vs_{k2}"] = {
+                            "statistic": round(float(stat), 4),
+                            "p_value":   round(float(p), 6),
+                            "significant_005": bool(p < 0.05),
+                            "significant_001": bool(p < 0.01),
+                        }
+                    except Exception as exc:
+                        pairs[f"{k1}_vs_{k2}"] = {
+                            "p_value": None,
+                            "significant_005": False,
+                            "note": str(exc),
+                        }
+            wilcoxon_output["metrics"][metric] = pairs
+
+        # ── Save JSON ──────────────────────────────────────────────────────────
+        json_path = self._out_dir / f"wilcoxon_{dataset}.json"
+        with open(json_path, "w") as f:
+            json.dump(wilcoxon_output, f, indent=2)
+
+        # ── Save TXT summary ───────────────────────────────────────────────────
+        txt_path = self._out_dir / f"wilcoxon_{dataset}.txt"
+        _metric_note = {
+            "f1":           "Overlap  | higher=better",
+            "sensitivity":  "Overlap  | higher=better",
+            "specificity":  "Overlap  | higher=better",
+            "auc":          "Overlap  | higher=better",
+            "jaccard":      "Overlap  | higher=better",
+            "cldice":       "Topology | higher=better",
+            "betti0_error": "Topology | lower=better  (komponen putus)",
+            "betti1_error": "Topology | lower=better  (loop palsu)",
+        }
+        lines = [
+            f"Wilcoxon Signed-Rank Test — {dataset.upper()}",
+            f"{'=' * 65}",
+            "Hipotesis nol (H0): tidak ada perbedaan distribusi antar fungsi loss.",
+            "Ditolak jika p-value < 0.05 (*) atau < 0.01 (**).",
+            "Catatan: Betti errors bernilai integer ≥ 0; 'all_differences_zero'",
+            "         berarti kedua loss mencapai topologi sempurna di semua gambar.",
+            "",
+        ]
+        for metric in _TEST_METRICS:
+            note = _metric_note.get(metric, "")
+            lines.append(f"Metrik: {metric.upper()}  [{note}]")
+            lines.append(f"  {'Pasangan':<30} {'p-value':>10}  {'Keterangan'}")
+            lines.append(f"  {'-'*65}")
+            pairs = wilcoxon_output["metrics"].get(metric, {})
+            for pair_key, v in pairs.items():
+                p    = v.get("p_value")
+                note = v.get("note", "")
+                if note == "all_differences_zero":
+                    sig   = "topologi identik di semua gambar"
+                    p_str = "–"
+                elif p is None:
+                    sig   = f"error: {note}"
+                    p_str = "N/A"
+                elif p < 0.01:
+                    sig   = "** signifikan (p<0.01)"
+                elif p < 0.05:
+                    sig   = "*  signifikan (p<0.05)"
+                else:
+                    sig   = "tidak signifikan"
+                    p_str = f"{p:.6f}"
+                if p is not None and note not in ("all_differences_zero",):
+                    p_str = f"{p:.6f}"
+                lines.append(f"  {pair_key:<30} {p_str:>10}  {sig}")
+            lines.append("")
+        txt_path.write_text("\n".join(lines), encoding="utf-8")
+
+        # ── Save heatmap PNG (F1 overlap + clDice topology, side-by-side) ────────
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+
+            idx_map     = {k: i for i, k in enumerate(loss_keys)}
+            short_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "")
+                            for k in loss_keys]
+
+            def _build_matrix(metric_key: str) -> np.ndarray:
+                mat = np.full((n, n), np.nan)
+                np.fill_diagonal(mat, 1.0)
+                for pair_key, v in wilcoxon_output["metrics"].get(metric_key, {}).items():
+                    k1, k2 = pair_key.split("_vs_")
+                    p = v.get("p_value")
+                    if p is not None and k1 in idx_map and k2 in idx_map:
+                        mat[idx_map[k1], idx_map[k2]] = p
+                        mat[idx_map[k2], idx_map[k1]] = p
+                return mat
+
+            def _annotate(ax_, mat_):
+                for i in range(n):
+                    for j in range(n):
+                        val = mat_[i, j]
+                        if np.isnan(val) or i == j:
+                            ax_.text(j, i, "–", ha="center", va="center",
+                                     fontsize=8, color="gray")
+                        elif val < 0.01:
+                            ax_.text(j, i, f"{val:.4f}\n(**)", ha="center",
+                                     va="center", fontsize=8, color="white")
+                        elif val < 0.05:
+                            ax_.text(j, i, f"{val:.4f}\n(*)", ha="center",
+                                     va="center", fontsize=8, color="black")
+                        else:
+                            ax_.text(j, i, f"{val:.4f}", ha="center",
+                                     va="center", fontsize=8, color="black")
+
+            heatmap_specs = [
+                ("f1",     "F1 Score (Overlap)"),
+                ("cldice", "clDice (Topology)"),
+            ]
+            fig, axes = plt.subplots(1, 2, figsize=(16, 7),
+                                     gridspec_kw={"wspace": 0.45})
+            fig.suptitle(
+                f"Wilcoxon Signed-Rank Test — {dataset.upper()}\n"
+                f"Hijau = signifikan  |  * p<0.05   ** p<0.01",
+                fontsize=11, fontweight="bold",
+            )
+
+            for ax, (mkey, mlabel) in zip(axes, heatmap_specs):
+                mat = _build_matrix(mkey)
+                im  = ax.imshow(mat, cmap="RdYlGn_r", vmin=0.0, vmax=0.10,
+                                aspect="auto")
+                plt.colorbar(im, ax=ax, label="p-value", shrink=0.85)
+                ax.set_xticks(range(n)); ax.set_yticks(range(n))
+                ax.set_xticklabels(short_labels, rotation=30, ha="right", fontsize=9)
+                ax.set_yticklabels(short_labels, fontsize=9)
+                ax.set_title(mlabel, fontsize=10, fontweight="bold")
+                _annotate(ax, mat)
+
+            heatmap_path = self._out_dir / f"wilcoxon_heatmap_{dataset}.png"
+            fig.savefig(str(heatmap_path), dpi=150, bbox_inches="tight")
+            plt.close(fig)
+            print(f"  Wilcoxon heatmap: {heatmap_path}")
+        except Exception as e:
+            print(f"  [WARN] Gagal membuat heatmap Wilcoxon: {e}")
+
+        print(f"  Wilcoxon JSON: {json_path}")
+        print(f"  Wilcoxon TXT : {txt_path}")
+        return json_path
 
     # ── Ranking table ─────────────────────────────────────────────────────────
 

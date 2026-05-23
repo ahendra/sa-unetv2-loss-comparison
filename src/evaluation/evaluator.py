@@ -198,7 +198,7 @@ class ModelEvaluator:
         avg["inference_time_sec"] = round(elapsed, 4)
         avg["num_images"] = len(per_image)
 
-        self._save_results(loss_name, avg)
+        self._save_results(loss_name, avg, per_image)
         self._print_results(loss_name, avg)
         print(f"  Prediction images → {pred_dir}")
         return avg
@@ -215,7 +215,8 @@ class ModelEvaluator:
     def results_exist(self, loss_name: str) -> bool:
         return self._result_path(loss_name).exists()
 
-    def _save_results(self, loss_name: str, metrics: Dict) -> None:
+    def _save_results(self, loss_name: str, metrics: Dict,
+                      per_image: List[Dict] = None) -> None:
         path = self._result_path(loss_name)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Keys stored as-is (not converted to percentage)
@@ -225,6 +226,20 @@ class ModelEvaluator:
             k: (round(v * 100, 2) if "betti" not in k and k not in _raw_keys else v)
             for k, v in metrics.items()
         }
+        # Per-image metrics for Wilcoxon signed-rank test (Sub-bab 4.7.5)
+        # Overlap metrics (higher=better): f1, sensitivity, specificity, auc, jaccard, cldice
+        # Topology metrics (lower=better): betti0_error, betti1_error
+        _wilcoxon_overlap  = {"f1", "sensitivity", "specificity", "auc", "jaccard", "cldice"}
+        _wilcoxon_topology = {"betti0_error", "betti1_error"}
+        _wilcoxon_keys     = _wilcoxon_overlap | _wilcoxon_topology
+        if per_image:
+            pct["per_image_metrics"] = [
+                {
+                    k: (round(m[k] * 100, 4) if k in _wilcoxon_overlap else round(m[k], 4))
+                    for k in _wilcoxon_keys if k in m
+                }
+                for m in per_image
+            ]
         with open(path, 'w') as f:
             json.dump(pct, f, indent=2)
         print(f"  Results saved to: {path}")
