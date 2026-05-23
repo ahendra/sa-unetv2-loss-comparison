@@ -10,7 +10,7 @@ from sklearn.metrics import f1_score
 from config import DriveConfig, StareConfig, RESULTS_DIR, RANDOM_SEED
 
 # Early-stopping patience inside each trial (separate from main training)
-_TRIAL_PATIENCE = 7
+_TRIAL_PATIENCE = 10
 
 # ── Parameter search spaces ───────────────────────────────────────────────────
 #
