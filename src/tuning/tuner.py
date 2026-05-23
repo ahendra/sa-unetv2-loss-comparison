@@ -324,7 +324,13 @@ class LossTuner:
     # ── Progress callback ─────────────────────────────────────────────────────
 
     def _on_trial_end(self, study, trial) -> None:
-        val  = f"{trial.value:.6f}" if trial.value is not None else "pruned"
+        import optuna
+        if trial.state == optuna.trial.TrialState.PRUNED:
+            val = "pruned"
+        elif trial.value is not None:
+            val = f"{trial.value:.6f}"
+        else:
+            val = "None"
         best = study.best_value if study.best_value is not None else 0.0
         print(
             f"  {trial.number + 1:>4}  F1={val}  Best={best:.6f}  {trial.params}",
@@ -398,7 +404,7 @@ class LossTuner:
             "all_trials": [
                 {
                     "number": t.number,
-                    "f1"    : t.value,
+                    "f1"    : t.value if t.state.name == "COMPLETE" else None,
                     "params": t.params,
                     "state" : t.state.name,
                 }
@@ -429,23 +435,26 @@ class LossTuner:
 
         import optuna
 
-        trials     = [t for t in study.trials if t.value is not None]
+        trials        = [t for t in study.trials if t.state.name == "COMPLETE" and t.value is not None]
+        pruned_trials = [t for t in study.trials if t.state.name == "PRUNED"]
         if not trials:
             return
 
         f1_vals    = [t.value for t in trials]
         best_curve = [max(f1_vals[:i + 1]) for i in range(len(f1_vals))]
         trial_nums = [t.number for t in trials]
+        pruned_nums = [t.number for t in pruned_trials]
         param_names = list(study.best_trial.params.keys())
         n_params   = len(param_names)
         n_cols     = min(n_params, 3) if n_params else 1
         n_prows    = (n_params + n_cols - 1) // n_cols if n_params else 0
         total_rows = 2 + n_prows
 
+        n_pruned_str = f"  |  Pruned: {len(pruned_trials)}" if pruned_trials else ""
         fig = plt.figure(figsize=(14, 4 * total_rows))
         fig.suptitle(
             f"Hyperparameter Tuning — {self.loss_key.upper()} ({self.cfg.name})\n"
-            f"Best F1: {study.best_value:.6f}  |  Trials: {len(trials)}",
+            f"Best F1: {study.best_value:.6f}  |  Complete: {len(trials)}{n_pruned_str}",
             fontsize=12, fontweight="bold",
         )
         gs = gridspec.GridSpec(total_rows, n_cols,
@@ -455,6 +464,10 @@ class LossTuner:
         ax0 = fig.add_subplot(gs[0, :])
         ax0.scatter(trial_nums, f1_vals, c="steelblue", s=35, alpha=0.7,
                     label="Trial F1", zorder=3)
+        if pruned_nums:
+            ax0.scatter(pruned_nums, [0.0] * len(pruned_nums),
+                        marker="x", c="gray", s=50, linewidths=1.5,
+                        alpha=0.6, label="Pruned", zorder=2)
         ax0.plot(trial_nums, best_curve, "r-", lw=2, label="Best so far")
         ax0.axhline(study.best_value, color="darkred", ls="--",
                     label=f"Best: {study.best_value:.6f}")
@@ -486,7 +499,13 @@ class LossTuner:
         for i, param in enumerate(param_names):
             ax = fig.add_subplot(gs[2 + i // n_cols, i % n_cols])
             pvals = [t.params[param] for t in trials]
-            ax.scatter(pvals, f1_vals, c="steelblue", s=25, alpha=0.7)
+            ax.scatter(pvals, f1_vals, c="steelblue", s=25, alpha=0.7, label="Complete")
+            if pruned_trials:
+                pruned_pvals = [t.params[param] for t in pruned_trials if param in t.params]
+                if pruned_pvals:
+                    ax.scatter(pruned_pvals, [0.0] * len(pruned_pvals),
+                               marker="x", c="gray", s=40, linewidths=1.2,
+                               alpha=0.6, label="Pruned")
             bv = study.best_trial.params[param]
             ax.axvline(bv, color="red", ls="--", lw=1.5, label=f"Best={bv:.4g}")
             ax.legend(fontsize=8)
