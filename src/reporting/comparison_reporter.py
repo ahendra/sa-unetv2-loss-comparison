@@ -81,45 +81,67 @@ class ComparisonReporter:
             print("  [WARN] matplotlib tidak terinstall, skip radar chart.")
             return None
 
-        metrics     = _PRIMARY_METRICS
-        n_m         = len(metrics)
-        angles      = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
-        angles     += angles[:1]
+        metrics = _PRIMARY_METRICS
+        n_m     = len(metrics)
+        angles  = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
+        angles += angles[:1]
 
-        fig, ax = plt.subplots(figsize=(8, 9), subplot_kw=dict(polar=True))
-        colors  = plt.cm.tab10(np.linspace(0, 1, len(LOSS_FUNCTIONS)))
+        fig, ax = plt.subplots(figsize=(9, 10), subplot_kw=dict(polar=True))
+        colors       = plt.cm.tab10(np.linspace(0, 1, len(LOSS_FUNCTIONS)))
+        linestyles   = ['-', '--', '-.', ':', (0, (3, 1, 1, 1)), (0, (5, 2))]
+        markerstyles = ['o', 's', '^', 'D', 'v', 'P']
 
-        for (loss_key, loss_label), color in zip(LOSS_FUNCTIONS.items(), colors):
+        # Per-metric min-max normalization: each spoke independently stretched
+        # to [_LO, _HI] so even sub-0.1% differences become clearly visible.
+        # Actual value ranges are shown in the spoke labels below.
+        _LO, _HI = 0.15, 0.90
+        metric_stats: Dict[str, tuple] = {}
+        for m in metrics:
+            vals_m = [results[k].get(m, 0) / 100.0
+                      for k in LOSS_FUNCTIONS if k in results]
+            metric_stats[m] = (min(vals_m), max(vals_m))
+
+        def _norm(val_pct: float, m: str) -> float:
+            raw = val_pct / 100.0
+            lo, hi = metric_stats[m]
+            rng = (hi - lo) if (hi - lo) > 1e-9 else 1e-9
+            return _LO + (raw - lo) / rng * (_HI - _LO)
+
+        for idx, ((loss_key, loss_label), color) in enumerate(
+                zip(LOSS_FUNCTIONS.items(), colors)):
             if loss_key not in results:
                 continue
-            vals  = [results[loss_key].get(m, 0) / 100.0 for m in metrics]
-            vals += vals[:1]
-            ax.plot(angles, vals, color=color, lw=1.8,
+            norm_vals  = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
+            norm_vals += norm_vals[:1]
+            ax.plot(angles, norm_vals,
+                    color=color, lw=2.0,
+                    linestyle=linestyles[idx % len(linestyles)],
+                    marker=markerstyles[idx % len(markerstyles)],
+                    markersize=6,
                     label=loss_label.replace(" (Baseline)", ""))
-            ax.fill(angles, vals, color=color, alpha=0.08)
+            ax.fill(angles, norm_vals, color=color, alpha=0.04)
 
-        # Dynamic radial range — zoom in so small differences are visible
-        all_vals_norm = [
-            results[k].get(m, 0) / 100.0
-            for k in results for m in metrics
+        # Radial ticks: relative labels (min → max per spoke)
+        r_ticks = np.linspace(_LO, _HI, 5)
+        ax.set_ylim(0.0, 1.0)
+        ax.set_yticks(r_ticks.tolist())
+        ax.set_yticklabels(["min", "25%", "50%", "75%", "max"],
+                           fontsize=7, color="gray")
+
+        # Spoke labels: metric name + actual [min–max] range in the data
+        spoke_labels = [
+            f"{m.upper()}\n"
+            f"[{metric_stats[m][0]*100:.2f}–{metric_stats[m][1]*100:.2f}%]"
+            for m in metrics
         ]
-        v_min = min(all_vals_norm) if all_vals_norm else 0.0
-        v_max = max(all_vals_norm) if all_vals_norm else 1.0
-        span  = max(v_max - v_min, 0.01)
-        r_min = max(0.0, v_min - max(0.03, span * 0.25))
-        r_max = min(1.0, v_max + max(0.01, span * 0.05))
-        ticks = np.linspace(r_min, r_max, 6)
-
         ax.set_xticks(angles[:-1])
-        ax.set_xticklabels([m.upper() for m in metrics], fontsize=10)
-        ax.set_ylim(r_min, r_max)
-        ax.set_yticks(ticks)
-        ax.set_yticklabels([f"{t * 100:.2f}%" for t in ticks], fontsize=7)
+        ax.set_xticklabels(spoke_labels, fontsize=8)
+
         ax.set_title(
-            f"Loss Function Comparison — {dataset.upper()}\n(6 primary metrics)",
-            fontsize=11, fontweight="bold", pad=20,
+            f"Loss Function Comparison — {dataset.upper()}\n"
+            f"Skala relatif per metrik  |  [min – max] = rentang nilai aktual",
+            fontsize=11, fontweight="bold", pad=25,
         )
-        # Legend placed below the polar axes — avoids overlap with spokes/labels
         handles, labels = ax.get_legend_handles_labels()
         fig.legend(
             handles, labels,
@@ -161,7 +183,8 @@ class ComparisonReporter:
             gridspec_kw={"hspace": 0.60, "wspace": 0.35},
         )
         fig.suptitle(
-            f"Loss Function Comparison — {dataset.upper()}",
+            f"Loss Function Comparison — {dataset.upper()}\n"
+            f"(sumbu-Y diperbesar per subplot  |  ╱╲ = axis tidak mulai dari nol)",
             fontsize=12, fontweight="bold",
         )
         axes_flat = np.array(axes).flatten()
@@ -170,13 +193,18 @@ class ComparisonReporter:
             ax   = axes_flat[m_idx]
             vals = [results[k].get(mkey, 0) for k in loss_keys]
 
-            # Per-metric y-axis zoom
             v_min = min(vals)
             v_max = max(vals)
-            span  = max(v_max - v_min, 0.05)
-            y_min = max(0.0,   v_min - max(0.3, span * 0.8))
-            y_max = min(100.0, v_max + max(0.3, span * 1.5))
-            label_offset = (y_max - y_min) * 0.025
+            span  = (v_max - v_min) if (v_max - v_min) > 1e-9 else 0.02
+
+            # Tight zoom: pad only 40% below and 60% above the data range
+            # so bars fill most of the subplot and small differences are visible
+            y_min = max(0.0,   v_min - span * 0.4)
+            y_max = min(100.0, v_max + span * 0.6)
+            if (y_max - y_min) < 0.01:
+                y_min = max(0.0,   v_min - 0.05)
+                y_max = min(100.0, v_max + 0.05)
+            label_offset = (y_max - y_min) * 0.02
 
             for i, (k, label, color) in enumerate(zip(loss_keys, loss_labels, colors)):
                 v = results[k].get(mkey, 0)
@@ -191,6 +219,16 @@ class ComparisonReporter:
             ax.set_xlim(-0.6, n_losses - 0.4)
             ax.set_ylim(y_min, y_max)
             ax.grid(axis="y", alpha=0.3)
+
+            # Axis-break indicator when y-axis doesn't start from zero
+            if y_min > 0:
+                ax.spines["bottom"].set_linewidth(0)
+                ax.tick_params(bottom=False)
+                d  = 0.012
+                kw = dict(transform=ax.transAxes, color="black",
+                          clip_on=False, lw=1.5)
+                ax.plot((-d, +d), (-2 * d, +2 * d), **kw)
+                ax.plot((1 - d, 1 + d), (-2 * d, +2 * d), **kw)
 
         # Hide unused panels
         for idx in range(len(metrics), len(axes_flat)):
