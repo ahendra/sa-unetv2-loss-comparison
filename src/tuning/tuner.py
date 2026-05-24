@@ -285,6 +285,55 @@ class LossTuner:
                     self.pruned = True
                     self.model.stop_training = True
 
+        class _ProgressCB(keras.callbacks.Callback):
+            """Overwrites one terminal line per epoch so the user can see training
+            is alive without flooding the console.  Prints a separator at trial
+            start and a newline at trial end so _on_trial_end output is clean."""
+
+            def __init__(self, trial_num: int, n_total, n_epochs: int,
+                         pruning_cb):
+                super().__init__()
+                self._trial_num  = trial_num
+                self._n_total    = n_total
+                self._n_epochs   = n_epochs
+                self._pruning_cb = pruning_cb
+                self._t0         = None
+
+            def on_train_begin(self, _logs=None):
+                self._t0 = time.perf_counter()
+                print(
+                    f"\n  ── Trial {self._trial_num}/{self._n_total} "
+                    + "─" * 42,
+                    flush=True,
+                )
+
+            def on_epoch_end(self, epoch, logs=None):
+                logs    = logs or {}
+                ep      = epoch + 1
+                elapsed = time.perf_counter() - self._t0
+                tpe     = elapsed / ep
+                eta     = tpe * max(0, self._n_epochs - ep)
+
+                loss     = logs.get("loss",         float("nan"))
+                val_loss = logs.get("val_loss",     float("nan"))
+                acc      = logs.get("accuracy",     float("nan"))
+                val_acc  = logs.get("val_accuracy", float("nan"))
+                val_f1   = self._pruning_cb.last_val_f1  # updated every interval epochs
+
+                print(
+                    f"\r  Ep {ep:>3}/{self._n_epochs}"
+                    f"  loss={loss:.4f}"
+                    f"  val_loss={val_loss:.4f}"
+                    f"  acc={acc * 100:.1f}%"
+                    f"  val_acc={val_acc * 100:.1f}%"
+                    f"  F1={val_f1:.4f}"
+                    f"  ETA:{eta:>5.0f}s   ",
+                    end="", flush=True,
+                )
+
+            def on_train_end(self, logs=None):
+                print(flush=True)   # end the \r line before _on_trial_end prints
+
         params  = _suggest(trial, self.loss_key)
         loss_fn = _build_loss(self.loss_key, params)
 
@@ -300,7 +349,9 @@ class LossTuner:
             metrics   = ['accuracy'],
         )
 
-        pruning_cb = _PruningCB(trial, self.x_val, self.y_val)
+        pruning_cb  = _PruningCB(trial, self.x_val, self.y_val)
+        n_total     = getattr(self, "_n_trials_total", "?")
+        progress_cb = _ProgressCB(trial.number + 1, n_total, self.n_epochs, pruning_cb)
         model.fit(
             self.x_train, self.y_train,
             validation_data = (self.x_val, self.y_val),
@@ -312,6 +363,7 @@ class LossTuner:
                               restore_best_weights=True,
                               verbose=0),
                 pruning_cb,
+                progress_cb,
             ],
             shuffle = True,
             verbose = 0,
@@ -397,6 +449,7 @@ class LossTuner:
             print(f"\n  {'Trial':>5}  {'F1':>8}  {'Best':>8}  Params")
             print(f"  {'─'*56}")
 
+        self._n_trials_total = n_trials
         t0 = time.perf_counter()
         if remaining > 0:
             study.optimize(self._objective, n_trials=remaining,
