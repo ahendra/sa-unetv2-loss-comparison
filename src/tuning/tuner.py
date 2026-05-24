@@ -256,17 +256,31 @@ class LossTuner:
         set_global_seed()
 
         class _PruningCB(keras.callbacks.Callback):
-            """Reports -val_loss to Optuna each epoch; stops training if pruned."""
-            def __init__(self, trial_):
-                super().__init__()
-                self._trial = trial_
-                self.pruned = False
+            """Reports val F1 to Optuna every interval_steps epochs.
 
-            def on_epoch_end(self, epoch, logs=None):
-                val_loss = (logs or {}).get('val_loss')
-                if val_loss is None:
+            Reporting -val_loss is incorrect for composite losses (e.g. BCE+MCC)
+            because the loss magnitude depends on the lambda hyperparameter being
+            tuned, making comparisons across trials unfair.  F1 is lambda-agnostic
+            and gives MedianPruner a consistent signal regardless of loss weights.
+            """
+            def __init__(self, trial_, x_val, y_val, interval: int = 5):
+                super().__init__()
+                self._trial    = trial_
+                self._x_val    = x_val
+                self._y_val    = y_val
+                self._interval = interval
+                self.pruned    = False
+                self.last_val_f1 = 0.0   # reused by caller to avoid redundant predict
+
+            def on_epoch_end(self, epoch, logs=None):  # noqa: ARG002 — Keras API contract
+                if epoch % self._interval != 0:
                     return
-                self._trial.report(-float(val_loss), epoch)
+                y_pred     = self.model.predict(self._x_val, verbose=0)
+                y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
+                y_true_bin = (self._y_val.ravel() > 0.5).astype(np.uint8)
+                val_f1     = float(f1_score(y_true_bin, y_pred_bin, zero_division=0))
+                self.last_val_f1 = val_f1
+                self._trial.report(val_f1, epoch)
                 if self._trial.should_prune():
                     self.pruned = True
                     self.model.stop_training = True
@@ -286,7 +300,7 @@ class LossTuner:
             metrics   = ['accuracy'],
         )
 
-        pruning_cb = _PruningCB(trial)
+        pruning_cb = _PruningCB(trial, self.x_val, self.y_val)
         model.fit(
             self.x_train, self.y_train,
             validation_data = (self.x_val, self.y_val),
@@ -304,11 +318,7 @@ class LossTuner:
         )
 
         if pruning_cb.pruned:
-            y_pred     = model.predict(self.x_val, batch_size=self.cfg.batch_size, verbose=0)
-            y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
-            y_true_bin = (self.y_val.ravel() > 0.5).astype(np.uint8)
-            pruned_f1  = float(f1_score(y_true_bin, y_pred_bin, zero_division=0))
-            trial.set_user_attr("pruned_f1", pruned_f1)
+            trial.set_user_attr("pruned_f1", pruning_cb.last_val_f1)
             del model
             gc.collect()
             keras.backend.clear_session()
@@ -482,14 +492,8 @@ class LossTuner:
                         vmin=vmin_f1, vmax=vmax_f1,
                         marker="x", s=60, linewidths=1.8,
                         alpha=0.75, label="Pruned (×)", zorder=2)
-        ax0.scatter([best_t.number], [study.best_value],
-                    c=[study.best_value], cmap=_CMAP, vmin=vmin_f1, vmax=vmax_f1,
-                    marker="*", s=280, zorder=6,
-                    edgecolors="navy", linewidths=0.8,
-                    label=f"Best ★ (trial #{best_t.number})")
-        ax0.plot(trial_nums, best_curve, color="navy", lw=2, label="Best so far")
-        ax0.axhline(study.best_value, color="navy", ls="--", alpha=0.6,
-                    label=f"Best: {study.best_value:.6f}")
+        ax0.plot(trial_nums, best_curve, color="navy", lw=2,
+                 label=f"Best so far (peak trial #{best_t.number}: {study.best_value:.6f})")
         cb0 = plt.colorbar(sc0, ax=ax0, pad=0.01)
         cb0.set_label("F1 Score", fontsize=9)
         ax0.set_xlabel("Trial"); ax0.set_ylabel("F1 Score")
@@ -558,10 +562,9 @@ class LossTuner:
                                    alpha=0.75, label="Pruned (×)")
                 bv = best_t.params[param]
                 ax.scatter([bv], [best_t.value],
-                           c=[best_t.value], cmap=_CMAP, vmin=vmin_f1, vmax=vmax_f1,
-                           marker="*", s=220, zorder=6,
-                           edgecolors="navy", linewidths=0.8,
-                           label="Best (★)")
+                           s=90, facecolors="none",
+                           edgecolors="navy", linewidths=2.2,
+                           zorder=5, label=f"Best (trial #{best_t.number})")
                 ax.axvline(bv, color="navy", ls="--", lw=1.5, label=f"Best={bv:.4g}")
                 cb_p = plt.colorbar(sc_p, ax=ax, pad=0.01)
                 cb_p.set_label("F1", fontsize=8)
@@ -572,6 +575,7 @@ class LossTuner:
             for idx in range(n_params, len(axes3_flat)):
                 axes3_flat[idx].axis("off")
 
+            fig3.tight_layout(rect=[0, 0, 1, 0.90])
             path3 = self.out_dir / f"{self.loss_key}_tuning_scatter.png"
             fig3.savefig(str(path3), dpi=150, bbox_inches="tight")
             plt.close(fig3)
