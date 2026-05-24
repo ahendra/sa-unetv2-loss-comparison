@@ -355,7 +355,11 @@ class LossTuner:
             load_if_exists = True,          # resume jika study sudah ada di SQLite
             direction   = "maximize",
             sampler     = optuna.samplers.TPESampler(seed=RANDOM_SEED),
-            pruner      = optuna.pruners.MedianPruner(n_startup_trials=10, n_warmup_steps=15, interval_steps=5),
+            pruner      = optuna.pruners.MedianPruner(
+                n_startup_trials = max(10, round(n_trials * 0.20)),
+                n_warmup_steps   = max(10, round(self.n_epochs * 0.70 / 5) * 5),
+                interval_steps   = 5,
+            ),
         )
 
         finished    = [t for t in study.trials
