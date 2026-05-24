@@ -305,20 +305,21 @@ def _load_training_data(cfg):
     if not _ensure_aug_dir(cfg):
         return None, None, None, None
     try:
+        aug_folder = f"aug_{cfg.preprocessing_mode}"
         if isinstance(cfg, DriveConfig):
             loader = DriveDataLoader(cfg)
-            print("\n  Memuat data training DRIVE (aug)...")
+            print(f"\n  Memuat data training DRIVE ({aug_folder}/train)...")
             x_train, y_train = loader.load_train()
             print(f"  Train: {x_train.shape}")
-            print("  Memuat data validasi DRIVE...")
+            print(f"  Memuat data validasi DRIVE ({aug_folder}/validate)...")
             x_val, y_val = loader.load_validate()
             print(f"  Validasi: {x_val.shape}")
         else:
             loader = StareDataLoader(cfg)
-            print("\n  Memuat data training STARE (aug/train)...")
+            print(f"\n  Memuat data training STARE ({aug_folder}/train)...")
             x_train, y_train = loader.load_train()
             print(f"  Train: {x_train.shape}")
-            print("  Memuat data validasi STARE (aug/validate)...")
+            print(f"  Memuat data validasi STARE ({aug_folder}/validate)...")
             x_val, y_val = loader.load_validate()
             print(f"  Validasi: {x_val.shape}")
         return x_train, y_train, x_val, y_val

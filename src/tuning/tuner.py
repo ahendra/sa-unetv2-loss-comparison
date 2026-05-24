@@ -351,7 +351,13 @@ class LossTuner:
 
         pruning_cb  = _PruningCB(trial, self.x_val, self.y_val)
         n_total     = getattr(self, "_n_trials_total", "?")
-        progress_cb = _ProgressCB(trial.number + 1, n_total, self.n_epochs, pruning_cb)
+        # Count only COMPLETE/PRUNED trials preceding this one so that interrupted
+        # (RUNNING/FAILED) trials from a previous crashed session are excluded.
+        study_ref   = getattr(self, "_study_ref", None)
+        n_done      = sum(1 for t in study_ref.trials
+                          if t.state.name in ("COMPLETE", "PRUNED")
+                          and t.number < trial.number) if study_ref else trial.number
+        progress_cb = _ProgressCB(n_done + 1, n_total, self.n_epochs, pruning_cb)
         model.fit(
             self.x_train, self.y_train,
             validation_data = (self.x_val, self.y_val),
@@ -450,6 +456,7 @@ class LossTuner:
             print(f"  {'─'*56}")
 
         self._n_trials_total = n_trials
+        self._study_ref      = study   # used in _objective to compute display trial number
         t0 = time.perf_counter()
         if remaining > 0:
             study.optimize(self._objective, n_trials=remaining,
