@@ -629,10 +629,6 @@ class LossTuner:
                                    marker="x", s=40, linewidths=1.2,
                                    alpha=0.75, label="Pruned (×)")
                 bv = best_t.params[param]
-                ax.scatter([bv], [best_t.value],
-                           s=90, facecolors="none",
-                           edgecolors="navy", linewidths=2.2,
-                           zorder=5, label=f"Best (trial #{best_t.number})")
                 ax.axvline(bv, color="navy", ls="--", lw=1.5, label=f"Best={bv:.4g}")
                 cb_p = plt.colorbar(sc_p, ax=ax, pad=0.01)
                 cb_p.set_label("F1", fontsize=8)
@@ -643,7 +639,7 @@ class LossTuner:
             for idx in range(n_params, len(axes3_flat)):
                 axes3_flat[idx].axis("off")
 
-            fig3.tight_layout(rect=[0, 0, 1, 0.90])
+            fig3.tight_layout(rect=[0, 0, 1, 0.85])
             path3 = self.out_dir / f"{self.loss_key}_tuning_scatter.png"
             fig3.savefig(str(path3), dpi=150, bbox_inches="tight")
             plt.close(fig3)
