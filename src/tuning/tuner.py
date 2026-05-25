@@ -406,8 +406,13 @@ class LossTuner:
         else:
             val = "None"
         best = study.best_value if study.best_value is not None else 0.0
+        # Use COMPLETE+PRUNED count (inclusive) so interrupted/crashed trials
+        # from previous sessions are excluded from the display number.
+        seq = sum(1 for t in study.trials
+                  if t.state.name in ("COMPLETE", "PRUNED")
+                  and t.number <= trial.number)
         print(
-            f"  {trial.number + 1:>4}  F1={val}  Best={best:.6f}  {trial.params}",
+            f"  {seq:>4}  F1={val}  Best={best:.6f}  {trial.params}",
             flush=True,
         )
 
