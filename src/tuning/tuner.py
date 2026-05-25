@@ -477,12 +477,15 @@ class LossTuner:
         elif self.loss_key == "bce_ssim":
             best_params["lambda_ssim"] = round(1.0 - best_params["lambda_bce"], 8)
 
+        _valid_trials = [t for t in study.trials
+                         if t.state.name in ("COMPLETE", "PRUNED")]
+
         result = {
             "loss_key"          : self.loss_key,
             "dataset"           : self.cfg.name,
             "best_f1"           : study.best_value,
             "best_params"       : best_params,
-            "n_trials"          : len(study.trials),
+            "n_trials"          : len(_valid_trials),
             "n_epochs_per_trial": self.n_epochs,
             "elapsed_sec"       : round(elapsed, 2),
             "db_path"           : str(self.db_path),
@@ -493,7 +496,7 @@ class LossTuner:
                     "params": t.params,
                     "state" : t.state.name,
                 }
-                for t in study.trials
+                for t in _valid_trials
             ],
         }
 
