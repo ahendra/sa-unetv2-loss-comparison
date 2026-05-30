@@ -639,7 +639,7 @@ class LossTuner:
             for idx in range(n_params, len(axes3_flat)):
                 axes3_flat[idx].axis("off")
 
-            fig3.tight_layout(rect=[0, 0, 1, 0.85])
+            fig3.subplots_adjust(top=0.85)
             path3 = self.out_dir / f"{self.loss_key}_tuning_scatter.png"
             fig3.savefig(str(path3), dpi=150, bbox_inches="tight")
             plt.close(fig3)
