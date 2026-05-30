@@ -175,36 +175,36 @@ LOSS_FUNCTIONS = {
 # ── Loss function hyperparameters ─────────────────────────────────────────────
 #without tuning
 
-LOSS_PARAMS = {
-    "bce_mcc": {
-        "lambda_bce": 0.5,
-        "lambda_mcc": 0.5,
-    },
-    "dice": {
-        "smooth": 1e-6,
-    },
-    "focal": {
-        "alpha": 0.25,
-        "gamma": 2.0,
-        "smooth": 1e-7, #epsilon untuk mencegah log(0) 1e-7
-    },
-    "cldice": {
-        "smooth": 1,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-        "iters":  25,   # Shit et al. CVPR 2021: 5...25, the iters its depends of the maximum diameter of vessel in datasets, for DRIVE and STARE the characteristic of vessel is big, so use maximum iters = 25 
-        "alpha":  0.2,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, where α ∈ [0, 0.5], for best clDice α=0.5 and for balance F1 α=0.2
-    },
-    "dice_ssim": {
-        "lambda_dice": 0.5,
-        "lambda_ssim": 0.5,
-        "smooth": 1e-6,
-    },
-    # Ref: "Retinal vascular segmentation network based on dual-scale
-    # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
-    "bce_ssim": {
-        "lambda_bce":  0.5,
-        "lambda_ssim": 0.5,
-    },
-}
+# LOSS_PARAMS = {
+#     "bce_mcc": {
+#         "lambda_bce": 0.5,
+#         "lambda_mcc": 0.5,
+#     },
+#     "dice": {
+#         "smooth": 1e-6,
+#     },
+#     "focal": {
+#         "alpha": 0.25,
+#         "gamma": 2.0,
+#         "smooth": 1e-7, #epsilon untuk mencegah log(0) 1e-7
+#     },
+#     "cldice": {
+#         "smooth": 1,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
+#         "iters":  25,   # Shit et al. CVPR 2021: 5...25, the iters its depends of the maximum diameter of vessel in datasets, for DRIVE and STARE the characteristic of vessel is big, so use maximum iters = 25 
+#         "alpha":  0.2,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, where α ∈ [0, 0.5], for best clDice α=0.5 and for balance F1 α=0.2
+#     },
+#     "dice_ssim": {
+#         "lambda_dice": 0.5,
+#         "lambda_ssim": 0.5,
+#         "smooth": 1e-6,
+#     },
+#     # Ref: "Retinal vascular segmentation network based on dual-scale
+#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
+#     "bce_ssim": {
+#         "lambda_bce":  0.5,
+#         "lambda_ssim": 0.5,
+#     },
+# }
 
 #tuning DRIVE
 # LOSS_PARAMS = {
@@ -239,33 +239,33 @@ LOSS_PARAMS = {
 # }
 
 #tuning STARE
-# LOSS_PARAMS = {
-#     "bce_mcc": {
-#         "lambda_bce": 0.5, #0.362397808134481,
-#         "lambda_mcc": 0.5, #0.63760219
-#     },
-#     "dice": {
-#         "smooth": 0.5169304244323399,
-#     },
-#     "focal": {
-#         "alpha": 0.5375999300628687,
-#         "gamma": 1.0960955962011756,
-#         "smooth": 7.4373220274892e-06,
-#     },
-#     "cldice": {
-#         "smooth": 1.0,
-#         "iters": 28,
-#         "alpha": 0.35130001769736685,
-#     },
-#     "dice_ssim": {
-#         "lambda_dice": 0.6542783048914624,
-#         "lambda_ssim": 0.3457217,
-#         "smooth": 0.13929185486422527,
-#     },
-#     # Ref: "Retinal vascular segmentation network based on dual-scale
-#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
-#     "bce_ssim": {
-#         "lambda_bce": 0.501566111746115,
-#         "lambda_ssim": 0.49843389,
-#     },
-# }
+LOSS_PARAMS = {
+    "bce_mcc": {
+        "lambda_bce": 0.3223769021565412,
+        "lambda_mcc": 0.6776231
+    },
+    "dice": {
+        "smooth": 4.1858227295469655e-05
+    },
+    "focal": {
+        "alpha": 0.5631601839330164,
+        "gamma": 1.031468314329436,
+        "smooth": 3.7044883546770435e-05
+    },
+    "cldice": {
+        "alpha": 0.3032384405804637,
+        "iters": 6,
+        "smooth": 0.016892466946428278
+    },
+    "dice_ssim": {
+        "lambda_dice": 0.681595817578043,
+        "smooth": 3.516363110875425e-05,
+        "lambda_ssim": 0.31840418
+    },
+    # Ref: "Retinal vascular segmentation network based on dual-scale
+    # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
+    "bce_ssim": {
+        "lambda_bce": 0.6802857225639665,
+        "lambda_ssim": 0.31971428
+    },
+}
