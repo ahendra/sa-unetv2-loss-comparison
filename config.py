@@ -87,7 +87,7 @@ class DriveConfig:
     # "clahe"       → CLAHE per-channel RGB, keep 3-channel output (input channels: 3)
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
-    preprocessing_mode: str  = "rgb"
+    preprocessing_mode: str  = "clahe"
     clahe_clip_limit: float  = 1.5   # Liskowski & Krawiec (2016); Wang et al. (2020)
     clahe_tile_grid: int     = 16     # OpenCV default; standard in retinal segmentation
 
@@ -144,7 +144,7 @@ class StareConfig:
     # "clahe"       → CLAHE per-channel RGB, keep 3-channel output (input channels: 3)
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
-    preprocessing_mode: str  = "rgb"
+    preprocessing_mode: str  = "clahe"
     clahe_clip_limit: float  = 1.5   # Liskowski & Krawiec (2016); Wang et al. (2020)
     clahe_tile_grid: int     = 16     # OpenCV default; standard in retinal segmentation
 
@@ -207,65 +207,65 @@ LOSS_FUNCTIONS = {
 # }
 
 #tuning DRIVE
-# LOSS_PARAMS = {
-#     "bce_mcc": {
-#         "lambda_bce": 0.5, #0.3023440621957503,
-#         "lambda_mcc": 0.5, #0.69765594,
-#     },
-#     "dice": {
-#         "smooth": 1.5115319924378078e-05,
-#     },
-#     "focal": {
-#         "alpha": 0.4850793731376367,
-#         "gamma": 0.7591057855231964,
-#         "smooth": 0.00012685264999107396,
-#     },
-#     "cldice": {
-#         "smooth": 1.0,  # Shit et al. CVPR 2021: smooth=1.0 (hardcoded in original repo)
-#         "iters":  25,
-#         "alpha":  0.3227210948926833,  # Shit et al. CVPR 2021: L = (1-α)·Dice + α·clDice, default α=0.5
-#     },
-#     "dice_ssim": {
-#         "lambda_dice": 0.589607963945301,
-#         "lambda_ssim": 0.41039204,
-#         "smooth": 0.01231826460645177,
-#     },
-#     # Ref: "Retinal vascular segmentation network based on dual-scale
-#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
-#     "bce_ssim": {
-#         "lambda_bce": 0.4240148908422406,
-#         "lambda_ssim": 0.57598511
-#     },
-# }
-
-#tuning STARE
 LOSS_PARAMS = {
     "bce_mcc": {
-        "lambda_bce": 0.45503768162558433,
-        "lambda_mcc": 0.54496232
+        "lambda_bce": 0.4493316780055831,
+        "lambda_mcc": 0.55066832
     },
     "dice": {
-        "smooth": 0.11567327199145977
+        "smooth": 0.013303245101522905
     },
     "focal": {
-        "alpha": 0.5378142648959591,
-        "gamma": 0.7929279245647644,
-        "smooth": 2.442728047335307e-07
+        "alpha": 0.4927018644601637,
+        "gamma": 0.5769731495471642,
+        "smooth": 2.4385048422727997e-05
     },
     "cldice": {
-        "alpha": 0.3022204958943645,
-        "iters": 21,
-        "smooth": 0.10464384317629476
+        "alpha": 0.30412688351894723,
+        "iters": 19,
+        "smooth": 2.553129294919967e-05
     },
     "dice_ssim": {
-        "lambda_dice": 0.449816047538945,
-        "smooth": 0.4518560951024106,
-        "lambda_ssim": 0.55018395
+        "lambda_dice": 0.627672587185872,
+        "smooth": 1.2333680117461434e-07,
+        "lambda_ssim": 0.37232741
     },
     # Ref: "Retinal vascular segmentation network based on dual-scale
     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
     "bce_ssim": {
-        "lambda_bce": 0.30610781061830905,
-        "lambda_ssim": 0.69389219
+        "lambda_bce": 0.5472968469657383,
+        "lambda_ssim": 0.45270315
     },
 }
+
+#tuning STARE
+# LOSS_PARAMS = {
+#     "bce_mcc": {
+#         "lambda_bce": 0.45503768162558433,
+#         "lambda_mcc": 0.54496232
+#     },
+#     "dice": {
+#         "smooth": 0.11567327199145977
+#     },
+#     "focal": {
+#         "alpha": 0.5378142648959591,
+#         "gamma": 0.7929279245647644,
+#         "smooth": 2.442728047335307e-07
+#     },
+#     "cldice": {
+#         "alpha": 0.3022204958943645,
+#         "iters": 21,
+#         "smooth": 0.10464384317629476
+#     },
+#     "dice_ssim": {
+#         "lambda_dice": 0.449816047538945,
+#         "smooth": 0.4518560951024106,
+#         "lambda_ssim": 0.55018395
+#     },
+#     # Ref: "Retinal vascular segmentation network based on dual-scale
+#     # morphological enhancement", Springer 2025 (DOI 10.1007/s44443-025-00191-3)
+#     "bce_ssim": {
+#         "lambda_bce": 0.30610781061830905,
+#         "lambda_ssim": 0.69389219
+#     },
+# }
