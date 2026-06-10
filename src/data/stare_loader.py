@@ -6,7 +6,7 @@ import numpy as np
 from PIL import Image
 from sklearn.model_selection import train_test_split
 
-from config import StareConfig, RANDOM_SEED
+from config import StareConfig
 from src.preprocessing import IdentityStep, PreprocessingPipeline, build_pipeline
 
 
@@ -41,19 +41,19 @@ class StareDataLoader:
     def load_train(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load training split.
         Matches original notebook: load all augmented images then split 90/10
-        with train_test_split(random_state=RANDOM_SEED).
+        with train_test_split(random_state=42).
         """
         x_all, y_all = self._load_all_augmented()
         x_train, _, y_train, _ = train_test_split(
-            x_all, y_all, test_size=0.1, shuffle=True, random_state=RANDOM_SEED
+            x_all, y_all, test_size=0.1, shuffle=True, random_state=42
         )
         return x_train, y_train
 
     def load_validate(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load validation split (10% of augmented data, random_state=RANDOM_SEED)."""
+        """Load validation split (10% of augmented data, random_state=42)."""
         x_all, y_all = self._load_all_augmented()
         _, x_val, _, y_val = train_test_split(
-            x_all, y_all, test_size=0.1, shuffle=True, random_state=RANDOM_SEED
+            x_all, y_all, test_size=0.1, shuffle=True, random_state=42
         )
         return x_val, y_val
 
