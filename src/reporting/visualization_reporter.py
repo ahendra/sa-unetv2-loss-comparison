@@ -32,7 +32,7 @@ def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int) -> None:
 class VisualizationReporter:
     """Build per-sample segmentation comparison grids for Section 4.5.
 
-    Grid layout per file (6 rows × n_loss_functions cols):
+    Grid layout per file (6 image rows + 1 label row + 1 legend row):
 
       Row 0 — Gambar Input                  : padded test image
       Row 1 — Ground Truth                  : manual annotation (grayscale)
@@ -40,11 +40,11 @@ class VisualizationReporter:
       Row 3 — Peta Kesalahan                : colour-coded TP / TN / FP / FN
       Row 4 — Detail Ground Truth (Zoom)    : centre-crop of ground truth
       Row 5 — Detail Prediksi Biner (Zoom)  : centre-crop of binary prediction
+      [col-label row]                        : loss-function names, same hspace gap
+      [legend row]                           : colour coding key, same hspace gap
 
     Rows 0–3 carry a red rectangle marking the zoom region.
-    Rows 4–5 show the actual cropped content (no box — they ARE the zoom).
-    Loss function names are shown both above Row 0 and below Row 5.
-    The colour legend sits in a dedicated gridspec row directly below Row 5.
+    hspace=0.06 is shared across ALL row transitions, so all gaps are uniform.
 
     Colour coding (Peta Kesalahan):
       TP = Hijau  (#00B400)  — vessel terdeteksi benar
@@ -115,39 +115,49 @@ class VisualizationReporter:
 
         for img_idx in sample_indices:
             # ── Figure dimensions ─────────────────────────────────────────
-            col_w     = 2.55   # inches per column
-            img_row_h = 2.50   # inches per image row
-            legend_h  = 0.46   # inches for legend row
+            col_w        = 2.55   # inches per column
+            img_row_h    = 2.50   # inches per image row
+            col_label_h  = 0.28   # inches for dedicated column-label row
+            legend_h     = 0.46   # inches for legend row
 
             fig_w = col_w * n_cols
-            fig_h = img_row_h * _N_IMG_ROWS + legend_h
+            fig_h = img_row_h * _N_IMG_ROWS + col_label_h + legend_h
 
             fig = plt.figure(figsize=(fig_w, fig_h))
 
-            # ── GridSpec: 6 image rows + 1 legend row ─────────────────────
-            # top=0.97 keeps the first image row close to the suptitle so
-            # there is no large blank gap between the title and the grid.
-            leg_ratio = legend_h / img_row_h
+            # ── GridSpec ──────────────────────────────────────────────────
+            # 6 image rows + 1 column-label row + 1 legend row.
+            # All rows share hspace=0.06, so every gap — including the gaps
+            # around the column-label and legend rows — is the same size.
+            col_label_ratio = col_label_h / img_row_h
+            leg_ratio       = legend_h    / img_row_h
             gs = gridspec.GridSpec(
-                _N_IMG_ROWS + 1, n_cols,
-                height_ratios=[1.0] * _N_IMG_ROWS + [leg_ratio],
+                _N_IMG_ROWS + 2, n_cols,
+                height_ratios=[1.0] * _N_IMG_ROWS + [col_label_ratio, leg_ratio],
                 hspace=0.06,
                 wspace=0.05,
                 top=0.97,
                 bottom=0.01,
             )
 
+            # Image-row axes  [6 × n_cols]
             axes = np.empty((_N_IMG_ROWS, n_cols), dtype=object)
             for r in range(_N_IMG_ROWS):
                 for c in range(n_cols):
                     axes[r, c] = fig.add_subplot(gs[r, c])
 
-            # Dedicated legend axes spanning all columns
-            ax_legend = fig.add_subplot(gs[_N_IMG_ROWS, :])
+            # Column-label axes  [n_cols]  — one per loss function
+            axes_labels = np.empty(n_cols, dtype=object)
+            for c in range(n_cols):
+                axes_labels[c] = fig.add_subplot(gs[_N_IMG_ROWS, c])
+                axes_labels[c].axis("off")
+
+            # Legend axes — spans all columns
+            ax_legend = fig.add_subplot(gs[_N_IMG_ROWS + 1, :])
             ax_legend.axis("off")
 
-            # y=0.99 anchors the title near the top of the figure; combined
-            # with top=0.97 in GridSpec this leaves only a small clean gap.
+            # y=0.99 + top=0.97 leaves only ~2 % figure-height between the
+            # suptitle and the first image row, eliminating the blank gap.
             fig.suptitle(
                 f"Segmentation Results — {self._cfg.name}   "
                 f"(Sampel #{img_idx + 1})",
@@ -192,7 +202,6 @@ class VisualizationReporter:
                 ax.imshow(orig_disp, cmap=cmap_orig)
                 _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
                 ax.axis("off")
-                # Column title above row 0
                 ax.set_title(short_label, fontsize=8, pad=3, fontweight="bold")
 
                 # ── Row 1: ground truth ───────────────────────────────────
@@ -258,13 +267,13 @@ class VisualizationReporter:
                     ax.text(0.5, 0.5, "N/A", ha="center", va="center",
                             transform=ax.transAxes, fontsize=7, color="#666")
                 ax.axis("off")
-                # Column title below row 5 (mirrors the title above row 0)
-                ax.text(
-                    0.5, -0.06, short_label,
-                    transform=ax.transAxes,
-                    ha="center", va="top",
+
+                # ── Column label (dedicated gridspec row) ─────────────────
+                axes_labels[col_idx].text(
+                    0.5, 0.5, short_label,
+                    transform=axes_labels[col_idx].transAxes,
+                    ha="center", va="center",
                     fontsize=8, fontweight="bold",
-                    clip_on=False,
                 )
 
             # ── Row labels on the left edge ───────────────────────────────
