@@ -1,4 +1,3 @@
-import os
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -8,20 +7,21 @@ import numpy as np
 from config import DriveConfig, LOSS_FUNCTIONS, RESULTS_DIR, StareConfig
 
 
-# Row descriptions — shown as rotated labels on the left side of each figure
+# Row labels shown as rotated text on the left edge of each figure.
 _ROW_LABELS = [
     "Gambar Input",
     "Ground Truth\n(Manual Annotation)",
     "Prediksi Biner\n(Threshold 0.5)",
     "Peta Kesalahan\n(TP / TN / FP / FN)",
-    "Detail Pembuluh\n(Zoom Pusat Retina)",
+    "Detail Ground Truth\n(Zoom Pusat Retina)",
+    "Detail Prediksi Biner\n(Zoom Pusat Retina)",
 ]
 
-_N_IMG_ROWS = 5
+_N_IMG_ROWS = 6
 
 
 def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int) -> None:
-    """Overlay a red rectangle that marks the zoomed crop on a given axes."""
+    """Overlay a red rectangle that marks the zoomed crop region."""
     from matplotlib.patches import Rectangle
     ax.add_patch(Rectangle(
         (x1, y1), x2 - x1, y2 - y1,
@@ -32,17 +32,19 @@ def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int) -> None:
 class VisualizationReporter:
     """Build per-sample segmentation comparison grids for Section 4.5.
 
-    Grid layout per file (5 rows × n_loss_functions cols):
+    Grid layout per file (6 rows × n_loss_functions cols):
 
-      Row 0 — Gambar Input              : padded test image
-      Row 1 — Ground Truth              : manual annotation (grayscale)
-      Row 2 — Prediksi Biner            : thresholded prediction (grayscale)
-      Row 3 — Peta Kesalahan            : colour-coded TP / TN / FP / FN
-      Row 4 — Detail Pembuluh (Zoom)    : centre-crop of binary prediction
+      Row 0 — Gambar Input                  : padded test image
+      Row 1 — Ground Truth                  : manual annotation (grayscale)
+      Row 2 — Prediksi Biner                : thresholded prediction (grayscale)
+      Row 3 — Peta Kesalahan                : colour-coded TP / TN / FP / FN
+      Row 4 — Detail Ground Truth (Zoom)    : centre-crop of ground truth
+      Row 5 — Detail Prediksi Biner (Zoom)  : centre-crop of binary prediction
 
-    Rows 0–3 each carry a red rectangle that marks the zoomed crop region.
-    The colour legend is rendered in a dedicated gridspec row directly below
-    Row 4 with no extra blank space.
+    Rows 0–3 carry a red rectangle marking the zoom region.
+    Rows 4–5 show the actual cropped content (no box — they ARE the zoom).
+    Loss function names are shown both above Row 0 and below Row 5.
+    The colour legend sits in a dedicated gridspec row directly below Row 5.
 
     Colour coding (Peta Kesalahan):
       TP = Hijau  (#00B400)  — vessel terdeteksi benar
@@ -114,43 +116,48 @@ class VisualizationReporter:
         for img_idx in sample_indices:
             # ── Figure dimensions ─────────────────────────────────────────
             col_w     = 2.55   # inches per column
-            img_row_h = 2.75   # inches per image row (tighter than original 3.3)
-            legend_h  = 0.46   # inches for the legend row
+            img_row_h = 2.50   # inches per image row
+            legend_h  = 0.46   # inches for legend row
 
             fig_w = col_w * n_cols
             fig_h = img_row_h * _N_IMG_ROWS + legend_h
 
             fig = plt.figure(figsize=(fig_w, fig_h))
 
-            # ── GridSpec: 5 image rows + 1 legend row ─────────────────────
-            leg_ratio = legend_h / img_row_h   # relative to one image row
+            # ── GridSpec: 6 image rows + 1 legend row ─────────────────────
+            # top=0.97 keeps the first image row close to the suptitle so
+            # there is no large blank gap between the title and the grid.
+            leg_ratio = legend_h / img_row_h
             gs = gridspec.GridSpec(
                 _N_IMG_ROWS + 1, n_cols,
                 height_ratios=[1.0] * _N_IMG_ROWS + [leg_ratio],
                 hspace=0.06,
                 wspace=0.05,
+                top=0.97,
+                bottom=0.01,
             )
 
-            # Build [n_img_rows × n_cols] axes array
             axes = np.empty((_N_IMG_ROWS, n_cols), dtype=object)
             for r in range(_N_IMG_ROWS):
                 for c in range(n_cols):
                     axes[r, c] = fig.add_subplot(gs[r, c])
 
-            # Dedicated axes spanning all columns for the colour legend
+            # Dedicated legend axes spanning all columns
             ax_legend = fig.add_subplot(gs[_N_IMG_ROWS, :])
             ax_legend.axis("off")
 
+            # y=0.99 anchors the title near the top of the figure; combined
+            # with top=0.97 in GridSpec this leaves only a small clean gap.
             fig.suptitle(
                 f"Segmentation Results — {self._cfg.name}   "
                 f"(Sampel #{img_idx + 1})",
-                fontsize=11, fontweight="bold",
+                fontsize=11, fontweight="bold", y=0.99,
             )
 
             gt      = y_test[img_idx]
             gt_disp = gt.squeeze()   # (H, W) float32
 
-            # ── Zoom crop region (same for every column) ──────────────────
+            # ── Zoom crop region (identical for every column) ─────────────
             H, W = gt_disp.shape
             ch = int(H * self._zoom_frac)
             cw = int(W * self._zoom_frac)
@@ -172,6 +179,7 @@ class VisualizationReporter:
                     cv2.imread(str(pred_path), cv2.IMREAD_GRAYSCALE)
                     if pred_path.exists() else None
                 )
+                short_label = loss_label.replace(" (Baseline)", "")
 
                 # ── Row 0: gambar input ───────────────────────────────────
                 orig = x_test[img_idx]
@@ -184,10 +192,8 @@ class VisualizationReporter:
                 ax.imshow(orig_disp, cmap=cmap_orig)
                 _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
                 ax.axis("off")
-                ax.set_title(
-                    loss_label.replace(" (Baseline)", ""),
-                    fontsize=8, pad=3, fontweight="bold",
-                )
+                # Column title above row 0
+                ax.set_title(short_label, fontsize=8, pad=3, fontweight="bold")
 
                 # ── Row 1: ground truth ───────────────────────────────────
                 ax = axes[1, col_idx]
@@ -232,8 +238,16 @@ class VisualizationReporter:
                             transform=ax.transAxes, fontsize=7, color="#666")
                 ax.axis("off")
 
-                # ── Row 4: zoomed binary prediction ──────────────────────
+                # ── Row 4: zoomed ground truth ────────────────────────────
                 ax = axes[4, col_idx]
+                ax.imshow(
+                    gt_disp[zy1:zy2, zx1:zx2],
+                    cmap="gray", vmin=0, vmax=1,
+                )
+                ax.axis("off")
+
+                # ── Row 5: zoomed binary prediction ──────────────────────
+                ax = axes[5, col_idx]
                 if pred_img is not None:
                     ax.imshow(
                         pred_img[zy1:zy2, zx1:zx2],
@@ -244,8 +258,16 @@ class VisualizationReporter:
                     ax.text(0.5, 0.5, "N/A", ha="center", va="center",
                             transform=ax.transAxes, fontsize=7, color="#666")
                 ax.axis("off")
+                # Column title below row 5 (mirrors the title above row 0)
+                ax.text(
+                    0.5, -0.06, short_label,
+                    transform=ax.transAxes,
+                    ha="center", va="top",
+                    fontsize=8, fontweight="bold",
+                    clip_on=False,
+                )
 
-            # ── Row labels on the left of the first column ───────────────
+            # ── Row labels on the left edge ───────────────────────────────
             for row_idx, row_label in enumerate(_ROW_LABELS):
                 axes[row_idx, 0].text(
                     -0.10, 0.5, row_label,
