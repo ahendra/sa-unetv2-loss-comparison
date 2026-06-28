@@ -6,7 +6,7 @@ from config import LOSS_FUNCTIONS, RESULTS_DIR
 
 
 _SHORT_LABELS: Dict[str, str] = {
-    "bce_mcc":   "BCE+MCC\n(Baseline)",
+    "bce_mcc":   "BCE+MCC",
     "dice":      "Dice Loss",
     "focal":     "Focal Loss",
     "cldice":    "clDice Loss",
@@ -78,14 +78,16 @@ class CombinedHistoryReporter:
 
             fig = plt.figure(figsize=(_FIG_W_IN, _FIG_H_IN))
 
-            # 2 subplot rows + 1 thin legend row
+            # 2 subplot rows + 1 thin legend row.
+            # left=0.100 provides enough room for the shared "Loss" fig.text +
+            # y-axis tick labels without competing row-label annotations.
             gs = gridspec.GridSpec(
                 n_rows + 1, n_cols,
                 figure=fig,
                 height_ratios=[1.0] * n_rows + [0.22],
                 hspace=0.52,
                 wspace=0.42,
-                left=0.085, right=0.997,
+                left=0.100, right=0.997,
                 top=0.91,   bottom=0.02,
             )
 
@@ -121,18 +123,29 @@ class CombinedHistoryReporter:
                         ax.set_xlabel("Epoch", labelpad=2)
                     else:
                         plt.setp(ax.get_xticklabels(), visible=False)
-                    # y-axis label: leftmost column only
-                    if col_idx == 0:
-                        ax.set_ylabel("Loss", labelpad=2)
 
-                # Dataset row label — rotated 90° on left edge
-                axes[row_idx][0].annotate(
-                    ds_label,
-                    xy=(-0.44, 0.5), xycoords="axes fraction",
-                    fontsize=8, fontweight="bold",
-                    ha="right", va="center",
-                    rotation=90, annotation_clip=False,
-                )
+                    # Dataset label inside the first column subplot (upper-left box).
+                    # Placed inside the axes to avoid competing with the y-axis area.
+                    if col_idx == 0:
+                        ax.text(
+                            0.04, 0.96, ds_label,
+                            transform=ax.transAxes,
+                            fontsize=7.5, fontweight="bold",
+                            ha="left", va="top",
+                            bbox=dict(boxstyle="square,pad=0.25",
+                                      facecolor="white", edgecolor="#aaaaaa",
+                                      alpha=0.85, linewidth=0.5),
+                            zorder=5,
+                        )
+
+            # Shared "Loss" y-axis label — single rotated text on the figure left,
+            # vertically centred over both subplot rows.  x=0.008 sits between the
+            # figure edge and the tick labels (which start at ≈ x=0.055).
+            fig.text(
+                0.008, 0.53, "Loss",
+                rotation=90, va="center", ha="center",
+                fontsize=8,
+            )
 
             # Shared legend row spanning all columns
             ax_leg = fig.add_subplot(gs[n_rows, :])
@@ -141,7 +154,7 @@ class CombinedHistoryReporter:
                 handles=[
                     Line2D([0], [0], color=_C_TRAIN, lw=1.4, ls="-",
                            label="Training Loss"),
-                    Line2D([0], [0], color=_C_VAL,   lw=1.4, ls="--",
+                    Line2D([0], [0], color=_C_VAL,   lw=1.4, ls="-",
                            label="Validation Loss"),
                     Line2D([0], [0], color=_C_BEST,  lw=1.0, ls=":",
                            label="Best Epoch"),
@@ -175,11 +188,25 @@ class CombinedHistoryReporter:
         epochs     = list(range(1, len(train_loss) + 1))
 
         ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.2, ls="-")
-        ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.2, ls="--")
+        ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.2, ls="-")
 
         if val_loss:
-            best_ep = val_loss.index(min(val_loss)) + 1
+            best_ep  = val_loss.index(min(val_loss)) + 1
+            best_val = min(val_loss)
             ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
+
+            # Best epoch annotation — top-right corner with white background box
+            ax.text(
+                0.97, 0.97,
+                f"Best epoch: {best_ep}\n(val_loss={best_val:.5f})",
+                transform=ax.transAxes,
+                fontsize=6, ha="right", va="top",
+                color="#222222",
+                bbox=dict(boxstyle="square,pad=0.25",
+                          facecolor="white", edgecolor="#cccccc",
+                          alpha=0.88, linewidth=0.4),
+                zorder=6,
+            )
 
         all_vals = [v for v in train_loss + val_loss if v == v]
         if all_vals:
