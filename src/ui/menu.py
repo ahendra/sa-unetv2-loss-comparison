@@ -13,8 +13,9 @@ from src.losses import get_loss_function
 from src.training import ModelTrainer
 from src.tuning import LossTuner
 from src.reporting import (
-    AblationReporter, ClaheTuningReporter, ComparisonReporter,
-    EnvironmentReporter, HistoryReporter, VisualizationReporter,
+    AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
+    ComparisonReporter, EnvironmentReporter, HistoryReporter,
+    VisualizationReporter,
 )
 
 
@@ -534,6 +535,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.4  Training History Curves",
             "4.5  Segmentation Visualization Grid",
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
+            "4.7  Training History Gabungan (DRIVE + STARE)",
             "Generate Semua Report",
         ],
         back_label="Kembali",
@@ -553,6 +555,8 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 6:
         _run_comparison_report(cfg, base / "section_4_6_comparison")
     elif choice == 7:
+        _run_combined_history_report(base / "section_4_7_combined_history")
+    elif choice == 8:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -611,6 +615,14 @@ def _run_comparison_report(cfg, out_dir) -> None:
     input("\n  Tekan Enter untuk kembali...")
 
 
+def _run_combined_history_report(out_dir) -> None:
+    reporter = CombinedHistoryReporter(out_dir)
+    path = reporter.generate()
+    if path:
+        print(f"\n  File tersimpan: {path}")
+    input("\n  Tekan Enter untuk kembali...")
+
+
 def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
     print("\n  Generating semua reports...\n")
     _run_env_report(base / "section_4_1_environment")
@@ -625,6 +637,7 @@ def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
             print(f"  {len(vis_paths)} file visualisasi tersimpan.")
 
     ComparisonReporter(base / "section_4_6_comparison").generate_all(cfg.name.lower())
+    CombinedHistoryReporter(base / "section_4_7_combined_history").generate()
     print(f"\n  Semua reports tersimpan di: {base}")
     input("\n  Tekan Enter untuk kembali...")
 
