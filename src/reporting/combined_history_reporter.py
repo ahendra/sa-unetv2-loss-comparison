@@ -98,7 +98,7 @@ class CombinedHistoryReporter:
                 figure=fig,
                 height_ratios=[1.0] * n_rows + [0.20],
                 hspace=0.38,
-                wspace=0.12,
+                wspace=0.42,
                 left=0.062, right=0.997,
                 top=0.91,   bottom=0.02,
             )
@@ -141,9 +141,6 @@ class CombinedHistoryReporter:
                         )
 
 
-                    # Y-tick labels: leftmost column only — saves wspace
-                    if col_idx != 0:
-                        plt.setp(ax.get_yticklabels(), visible=False)
 
                     # Dataset label inside subplot, upper-left box (col 0 only)
                     if col_idx == 0:
@@ -221,13 +218,13 @@ class CombinedHistoryReporter:
             best_val = min(val_loss)
             ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
 
-            # Best-epoch annotation — fontsize=5, positioned at (0.97, 0.93)
-            # so the bbox top stays safely inside the axes top spine.
+            # Best-epoch annotation — placed at vertical centre (0.50) to
+            # avoid overlap with the DRIVE/STARE label in the upper-left.
             ax.text(
-                0.97, 0.93,
+                0.97, 0.50,
                 f"Best epoch: {best_ep}\n(val_loss={best_val:.5f})",
                 transform=ax.transAxes,
-                fontsize=5, ha="right", va="top",
+                fontsize=5, ha="right", va="center",
                 color="#222222",
                 bbox=dict(boxstyle="square,pad=0.22",
                           facecolor="white", edgecolor="#cccccc",
