@@ -533,7 +533,8 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.2  Preprocessing Ablation Study",
             "4.3  CLAHE Parameter Tuning Study",
             "4.4  Training History Curves",
-            "4.5  Segmentation Visualization Grid",
+            "4.5  Segmentation Visualization Grid (Bahasa Indonesia)",
+            "4.5b Segmentation Visualization Grid (English — Journal Format)",
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
             "4.7  Training History Gabungan (DRIVE + STARE)",
             "Generate Semua Report",
@@ -553,10 +554,12 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 5:
         _run_visualization_report(cfg, trainer, base / "section_4_5_visualization")
     elif choice == 6:
-        _run_comparison_report(cfg, base / "section_4_6_comparison")
+        _run_visualization_report_en(cfg, trainer, base / "section_4_5b_visualization_en")
     elif choice == 7:
-        _run_combined_history_report(base / "section_4_7_combined_history")
+        _run_comparison_report(cfg, base / "section_4_6_comparison")
     elif choice == 8:
+        _run_combined_history_report(base / "section_4_7_combined_history")
+    elif choice == 9:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -604,6 +607,19 @@ def _run_visualization_report(cfg, trainer: ModelTrainer, out_dir) -> None:
     paths = reporter.generate(x_test, y_test, list(range(n)))
     if paths:
         print(f"\n  {len(paths)} file visualisasi tersimpan (1 file per sampel).")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_visualization_report_en(cfg, _trainer: ModelTrainer, out_dir) -> None:
+    x_test, y_test, masks, restore_fn = _load_test_data(cfg)
+    if x_test is None:
+        return
+    n_max = len(x_test)
+    n     = min(_ask_int(f"Jumlah gambar sampel (max {n_max})", 3, 1, n_max), n_max)
+    reporter = VisualizationReporter(cfg, out_dir, n_samples=n, lang="en")
+    paths = reporter.generate(x_test, y_test, list(range(n)))
+    if paths:
+        print(f"\n  {len(paths)} file visualisasi (EN) tersimpan.")
     input("\n  Tekan Enter untuk kembali...")
 
 
