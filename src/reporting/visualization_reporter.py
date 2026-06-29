@@ -168,11 +168,8 @@ class VisualizationReporter:
             _dpi          = 300
             _legend_ncol  = 2
             _top          = 0.99
-            # Row labels are rotated 90°: text "width" becomes vertical extent.
-            # Longest label line "(TP / TN / FP / FN)" = 20 chars.
-            # At 8pt: 20 × 8 × 0.60 / 72 = 1.33 in > img_row_h 1.207 in → overflow.
-            # At 6.5pt: 20 × 6.5 × 0.60 / 72 = 1.08 in < 1.207 in → fits with margin.
-            _row_label_fs = 6.5
+            _row_label_fs = 8
+            _legend_fs    = 8
         else:
             col_w         = 2.55
             img_row_h     = 2.50
@@ -183,6 +180,7 @@ class VisualizationReporter:
             _legend_ncol  = 2
             _top          = 0.97
             _row_label_fs = 8
+            _legend_fs    = 8
 
         col_label_ratio = col_label_h / img_row_h
         leg_ratio       = legend_h    / img_row_h
@@ -366,9 +364,9 @@ class VisualizationReporter:
                 ax_legend.legend(
                     handles=legend_patches,
                     loc="center", ncol=_legend_ncol,
-                    fontsize=8, framealpha=0.95,
+                    fontsize=_legend_fs, framealpha=0.95,
                     title=txt["title"],
-                    title_fontsize=8,
+                    title_fontsize=_legend_fs,
                 )
 
                 _lang_suffix = "_en" if self._lang == "en" else ""
