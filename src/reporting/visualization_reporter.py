@@ -158,23 +158,31 @@ class VisualizationReporter:
 
         # ── Layout parameters (outside loop — same for every sample) ──────
         if self._lang == "en":
-            fig_w        = _FIG_W_EN_IN           # 7.244 in, A4 full-width
-            col_w        = fig_w / n_cols          # 1.207 in per column
-            img_row_h    = col_w                   # square image cells
-            col_label_h  = 0.14
-            legend_h     = 0.22
-            _dpi         = 300
-            _legend_ncol = 4
-            _top         = 0.99
+            fig_w         = _FIG_W_EN_IN           # 7.244 in, A4 full-width
+            col_w         = fig_w / n_cols          # 1.207 in per column
+            img_row_h     = col_w                   # square image cells
+            col_label_h   = 0.14
+            # legend_h must hold: title (8pt) + 1 patch-row (ncol=4) + padding
+            # ≈ 0.111 + 0.188 + 0.15 = ~0.45 in to avoid overflow into col-label row
+            legend_h      = 0.45
+            _dpi          = 300
+            _legend_ncol  = 4
+            _top          = 0.99
+            # Row labels are rotated 90°: text "width" becomes vertical extent.
+            # Longest label line "(TP / TN / FP / FN)" = 20 chars.
+            # At 8pt: 20 × 8 × 0.60 / 72 = 1.33 in > img_row_h 1.207 in → overflow.
+            # At 6.5pt: 20 × 6.5 × 0.60 / 72 = 1.08 in < 1.207 in → fits with margin.
+            _row_label_fs = 6.5
         else:
-            col_w        = 2.55
-            img_row_h    = 2.50
-            col_label_h  = 0.28
-            legend_h     = 0.46
-            fig_w        = col_w * n_cols
-            _dpi         = 150
-            _legend_ncol = 2
-            _top         = 0.97
+            col_w         = 2.55
+            img_row_h     = 2.50
+            col_label_h   = 0.28
+            legend_h      = 0.46
+            fig_w         = col_w * n_cols
+            _dpi          = 150
+            _legend_ncol  = 2
+            _top          = 0.97
+            _row_label_fs = 8
 
         col_label_ratio = col_label_h / img_row_h
         leg_ratio       = legend_h    / img_row_h
@@ -349,7 +357,7 @@ class VisualizationReporter:
                     axes[row_idx, 0].text(
                         -0.10, 0.5, row_label,
                         transform=axes[row_idx, 0].transAxes,
-                        fontsize=8, ha="right", va="center",
+                        fontsize=_row_label_fs, ha="right", va="center",
                         rotation=90, fontweight="bold",
                         clip_on=False,
                     )
