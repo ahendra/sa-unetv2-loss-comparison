@@ -162,11 +162,11 @@ class VisualizationReporter:
             col_w         = fig_w / n_cols          # 1.207 in per column
             img_row_h     = col_w                   # square image cells
             col_label_h   = 0.14
-            # legend_h must hold: title (8pt) + 1 patch-row (ncol=4) + padding
-            # ≈ 0.111 + 0.188 + 0.15 = ~0.45 in to avoid overflow into col-label row
-            legend_h      = 0.45
+            # legend_h must hold: title (8pt) + 2 patch-rows (ncol=2) + padding
+            # ≈ 0.111 + 2×0.167 + 0.10 = ~0.55 in to avoid overflow into col-label row
+            legend_h      = 0.55
             _dpi          = 300
-            _legend_ncol  = 4
+            _legend_ncol  = 2
             _top          = 0.99
             # Row labels are rotated 90°: text "width" becomes vertical extent.
             # Longest label line "(TP / TN / FP / FN)" = 20 chars.
