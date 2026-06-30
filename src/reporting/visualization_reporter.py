@@ -160,7 +160,9 @@ class VisualizationReporter:
         if self._lang == "en":
             fig_w         = _FIG_W_EN_IN           # 7.244 in, A4 full-width
             col_w         = fig_w / n_cols          # 1.207 in per column
-            img_row_h     = col_w                   # square image cells
+            # img_row_h > col_w so 8 pt rotated labels (longest ≈ 1.33 in) fit
+            # within each row without overflowing into adjacent rows.
+            img_row_h     = 1.50                    # inches per image row
             col_label_h   = 0.14
             # legend_h must hold: title (8pt) + 2 patch-rows (ncol=2) + padding
             # ≈ 0.111 + 2×0.167 + 0.10 = ~0.55 in to avoid overflow into col-label row
