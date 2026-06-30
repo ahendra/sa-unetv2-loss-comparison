@@ -160,9 +160,17 @@ class VisualizationReporter:
         if self._lang == "en":
             fig_w         = _FIG_W_EN_IN           # 7.244 in, A4 full-width
             col_w         = fig_w / n_cols          # 1.207 in per column
-            # img_row_h > col_w so 8 pt rotated labels (longest ≈ 1.33 in) fit
-            # within each row without overflowing into adjacent rows.
-            img_row_h     = 1.50                    # inches per image row
+            # Derive row height from the first sample's actual pixel dimensions so
+            # the layout adapts to each dataset (DRIVE portrait vs STARE landscape).
+            # Floor: 1.12 in keeps 7 pt rotated labels (longest ≈ 1.09 in) safe.
+            _min_row_h    = 1.12
+            if sample_indices:
+                _ref       = np.squeeze(y_test[sample_indices[0]])
+                _img_h, _img_w = _ref.shape[:2]
+                _natural_h = col_w * (_img_h / _img_w)
+            else:
+                _natural_h = col_w   # fallback: square cells
+            img_row_h     = max(_natural_h, _min_row_h)
             col_label_h   = 0.14
             # legend_h must hold: title (8pt) + 2 patch-rows (ncol=2) + padding
             # ≈ 0.111 + 2×0.167 + 0.10 = ~0.55 in to avoid overflow into col-label row
@@ -170,7 +178,7 @@ class VisualizationReporter:
             _dpi          = 300
             _legend_ncol  = 2
             _top          = 0.99
-            _row_label_fs = 8
+            _row_label_fs = 7
             _legend_fs    = 8
         else:
             col_w         = 2.55
