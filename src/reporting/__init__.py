@@ -2,6 +2,7 @@ from .ablation_reporter import AblationReporter
 from .clahe_tuning_reporter import ClaheTuningReporter
 from .combined_history_reporter import CombinedHistoryReporter
 from .comparison_reporter import ComparisonReporter
+from .comparison_reporter_en import ComparisonReporterEN
 from .env_reporter import EnvironmentReporter
 from .history_reporter import HistoryReporter
 from .visualization_reporter import VisualizationReporter

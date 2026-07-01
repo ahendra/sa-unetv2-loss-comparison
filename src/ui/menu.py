@@ -14,8 +14,8 @@ from src.training import ModelTrainer
 from src.tuning import LossTuner
 from src.reporting import (
     AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
-    ComparisonReporter, EnvironmentReporter, HistoryReporter,
-    VisualizationReporter,
+    ComparisonReporter, ComparisonReporterEN, EnvironmentReporter,
+    HistoryReporter, VisualizationReporter,
 )
 
 
@@ -536,6 +536,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.5  Segmentation Visualization Grid (Bahasa Indonesia)",
             "4.5b Segmentation Visualization Grid (English — Journal Format)",
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
+            "4.6b Radar Chart Comparison — DRIVE + STARE (English / Journal)",
             "4.7  Training History Gabungan (DRIVE + STARE)",
             "Generate Semua Report",
         ],
@@ -558,8 +559,10 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 7:
         _run_comparison_report(cfg, base / "section_4_6_comparison")
     elif choice == 8:
-        _run_combined_history_report(base / "section_4_7_combined_history")
+        _run_comparison_report_en(base / "section_4_6b_comparison_en")
     elif choice == 9:
+        _run_combined_history_report(base / "section_4_7_combined_history")
+    elif choice == 10:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -628,6 +631,14 @@ def _run_comparison_report(cfg, out_dir) -> None:
     paths = reporter.generate_all(dataset=cfg.name.lower())
     if paths:
         print(f"\n  {len(paths)} file comparison tersimpan.")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_comparison_report_en(out_dir) -> None:
+    reporter = ComparisonReporterEN(out_dir)
+    path = reporter.generate()
+    if path:
+        print(f"\n  File tersimpan: {path}")
     input("\n  Tekan Enter untuk kembali...")
 
 
