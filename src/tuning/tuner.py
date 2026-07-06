@@ -567,7 +567,7 @@ class LossTuner:
         ax0.set_xlabel("Trial"); ax0.set_ylabel("F1 Score")
         ax0.set_title("Optimization History")
         ax0.legend(fontsize=9); ax0.grid(alpha=0.3)
-        fig1.tight_layout(rect=[0, 0, 1, 0.86])
+        fig1.tight_layout(rect=[0, 0, 1, 0.88])
         path1 = self.out_dir / f"{self.loss_key}_tuning_history.png"
         fig1.savefig(str(path1), dpi=300, bbox_inches="tight")
         plt.close(fig1)
@@ -593,7 +593,7 @@ class LossTuner:
                      ha="center", va="center",
                      transform=ax1.transAxes, fontsize=10)
         ax1.set_title("Parameter Importance (fANOVA)")
-        fig2.tight_layout(rect=[0, 0, 1, 0.82])
+        fig2.tight_layout(rect=[0, 0, 1, 0.88])
         path2 = self.out_dir / f"{self.loss_key}_tuning_importance.png"
         fig2.savefig(str(path2), dpi=300, bbox_inches="tight")
         plt.close(fig2)
@@ -634,7 +634,7 @@ class LossTuner:
                 cb_p.set_label("F1", fontsize=8)
                 ax.legend(fontsize=8)
                 ax.set_xlabel(param); ax.set_ylabel("F1")
-                ax.set_title(f"{param} vs F1"); ax.grid(alpha=0.3)
+                ax.grid(alpha=0.3)
 
             for idx in range(n_params, len(axes3_flat)):
                 axes3_flat[idx].axis("off")
