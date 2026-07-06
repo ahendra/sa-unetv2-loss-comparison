@@ -437,7 +437,7 @@ class ClaheTuningReporter:
         tags      = list(results.keys())
         n_tags    = len(tags)
         n_metrics = len(_METRIC_KEYS)
-        n_cols    = 4
+        n_cols    = 3
         n_rows    = (n_metrics + n_cols - 1) // n_cols
 
         # One distinct color per non-best tag, indexed by position — never shared.
@@ -476,9 +476,9 @@ class ClaheTuningReporter:
             for t in tags
         ]
 
-        fig = plt.figure(figsize=(5 * n_cols, 4 * n_rows))
+        fig = plt.figure(figsize=(5.5 * n_cols, 4.5 * n_rows))
         gs  = gridspec.GridSpec(n_rows, n_cols, figure=fig,
-                                hspace=0.65, wspace=0.35)
+                                hspace=0.58, wspace=0.28)
         fig.patch.set_facecolor("#ffffff")
 
         # Number of charts in the last (possibly partial) row
@@ -553,7 +553,7 @@ class ClaheTuningReporter:
         )
 
         path = self.out_dir / f"clahe_tuning_{dataset}.png"
-        fig.savefig(path, dpi=150, bbox_inches='tight',
+        fig.savefig(path, dpi=300, bbox_inches='tight',
                     facecolor=fig.get_facecolor())
         plt.close(fig)
         print(f"  Chart tersimpan: {path}")
