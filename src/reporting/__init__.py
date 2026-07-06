@@ -5,4 +5,5 @@ from .comparison_reporter import ComparisonReporter
 from .comparison_reporter_en import ComparisonReporterEN
 from .env_reporter import EnvironmentReporter
 from .history_reporter import HistoryReporter
+from .tuning_plot_reporter import TuningPlotReporter
 from .visualization_reporter import VisualizationReporter

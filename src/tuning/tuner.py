@@ -567,9 +567,9 @@ class LossTuner:
         ax0.set_xlabel("Trial"); ax0.set_ylabel("F1 Score")
         ax0.set_title("Optimization History")
         ax0.legend(fontsize=9); ax0.grid(alpha=0.3)
-        fig1.tight_layout()
+        fig1.tight_layout(rect=[0, 0, 1, 0.88])
         path1 = self.out_dir / f"{self.loss_key}_tuning_history.png"
-        fig1.savefig(str(path1), dpi=150, bbox_inches="tight")
+        fig1.savefig(str(path1), dpi=300, bbox_inches="tight")
         plt.close(fig1)
         print(f"  Grafik history    : {path1}")
 
@@ -593,9 +593,9 @@ class LossTuner:
                      ha="center", va="center",
                      transform=ax1.transAxes, fontsize=10)
         ax1.set_title("Parameter Importance (fANOVA)")
-        fig2.tight_layout()
+        fig2.tight_layout(rect=[0, 0, 1, 0.88])
         path2 = self.out_dir / f"{self.loss_key}_tuning_importance.png"
-        fig2.savefig(str(path2), dpi=150, bbox_inches="tight")
+        fig2.savefig(str(path2), dpi=300, bbox_inches="tight")
         plt.close(fig2)
         print(f"  Grafik importance : {path2}")
 
@@ -639,11 +639,53 @@ class LossTuner:
             for idx in range(n_params, len(axes3_flat)):
                 axes3_flat[idx].axis("off")
 
-            fig3.subplots_adjust(top=0.85)
+            fig3.tight_layout(rect=[0, 0, 1, 0.88])
             path3 = self.out_dir / f"{self.loss_key}_tuning_scatter.png"
-            fig3.savefig(str(path3), dpi=150, bbox_inches="tight")
+            fig3.savefig(str(path3), dpi=300, bbox_inches="tight")
             plt.close(fig3)
             print(f"  Grafik scatter    : {path3}")
+
+    # ── Regenerate from existing DB ───────────────────────────────────────────
+
+    @classmethod
+    def regenerate_plots_from_db(
+        cls,
+        cfg: Union[DriveConfig, StareConfig],
+        loss_key: str,
+    ) -> bool:
+        """Reload an existing Optuna study from its SQLite DB and regenerate charts.
+
+        Does NOT retrain or re-run tuning — only reads the DB and rewrites the
+        3 PNG files with the current _save_plots styling.
+        Returns True on success, False if the DB is missing or unreadable.
+        """
+        import optuna
+        optuna.logging.set_verbosity(optuna.logging.WARNING)
+
+        out_dir    = RESULTS_DIR / cfg.name.lower() / "tuning"
+        db_path    = out_dir / f"{loss_key}_tuning.db"
+
+        if not db_path.exists():
+            print(f"  [SKIP] DB tidak ditemukan: {db_path}")
+            return False
+
+        study_name = f"{cfg.name.lower()}_{loss_key}"
+        storage    = f"sqlite:///{db_path}"
+        try:
+            study = optuna.load_study(study_name=study_name, storage=storage)
+        except Exception as exc:
+            print(f"  [WARN] Gagal memuat study '{study_name}': {exc}")
+            return False
+
+        regen_dir = out_dir / "regenerated"
+        regen_dir.mkdir(parents=True, exist_ok=True)
+
+        instance           = cls.__new__(cls)
+        instance.cfg       = cfg
+        instance.loss_key  = loss_key
+        instance.out_dir   = regen_dir
+        instance._save_plots(study)
+        return True
 
     # ── Summary ───────────────────────────────────────────────────────────────
 

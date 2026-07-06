@@ -15,7 +15,7 @@ from src.tuning import LossTuner
 from src.reporting import (
     AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
     ComparisonReporter, ComparisonReporterEN, EnvironmentReporter,
-    HistoryReporter, VisualizationReporter,
+    HistoryReporter, TuningPlotReporter, VisualizationReporter,
 )
 
 
@@ -538,6 +538,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
             "4.6b Radar Chart Comparison — DRIVE + STARE (English / Journal)",
             "4.7  Training History Gabungan (DRIVE + STARE)",
+            "4.8  Tuning Hyperparameter Loss — Regenerate Charts",
             "Generate Semua Report",
         ],
         back_label="Kembali",
@@ -563,6 +564,8 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 9:
         _run_combined_history_report(base / "section_4_7_combined_history")
     elif choice == 10:
+        _run_tuning_plot_report(base / "section_4_8_tuning_plots")
+    elif choice == 11:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -647,6 +650,19 @@ def _run_combined_history_report(out_dir) -> None:
     path = reporter.generate()
     if path:
         print(f"\n  File tersimpan: {path}")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_tuning_plot_report(out_dir) -> None:
+    print("\n  Regenerate Hyperparameter Tuning Charts")
+    print("  Memuat DB Optuna yang sudah ada dan membuat ulang 3 chart per fungsi loss.")
+    print("  (Tidak melakukan tuning ulang — hanya regenerasi file PNG)\n")
+    reporter = TuningPlotReporter(out_dir)
+    paths = reporter.regenerate_all()
+    if paths:
+        print(f"\n  {len(paths)} file chart berhasil diregenerasi.")
+    else:
+        print("\n  [WARN] Tidak ada chart yang diregenerasi. Pastikan DB tuning sudah ada.")
     input("\n  Tekan Enter untuk kembali...")
 
 
