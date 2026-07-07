@@ -14,8 +14,8 @@ from src.training import ModelTrainer
 from src.tuning import LossTuner
 from src.reporting import (
     AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
-    ComparisonReporter, ComparisonReporterEN, EnvironmentReporter,
-    HistoryReporter, TuningPlotReporter, VisualizationReporter,
+    ComparisonBarReporter, ComparisonReporter, ComparisonReporterEN,
+    EnvironmentReporter, HistoryReporter, TuningPlotReporter, VisualizationReporter,
 )
 
 
@@ -537,6 +537,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.5b Segmentation Visualization Grid (English — Journal Format)",
             "4.6  Loss Function Comparison (Radar + Bar + Ranking)",
             "4.6b Radar Chart Comparison — DRIVE + STARE (English / Journal)",
+            "4.6c Bar Chart Comparison — DRIVE + STARE (Journal, Helvetica 8pt)",
             "4.7  Training History Gabungan (DRIVE + STARE)",
             "4.8  Tuning Hyperparameter Loss — Regenerate Charts",
             "Generate Semua Report",
@@ -562,10 +563,12 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 8:
         _run_comparison_report_en(base / "section_4_6b_comparison_en")
     elif choice == 9:
-        _run_combined_history_report(base / "section_4_7_combined_history")
+        _run_comparison_bar_report(base / "section_4_6c_comparison_bar")
     elif choice == 10:
-        _run_tuning_plot_report(base / "section_4_8_tuning_plots")
+        _run_combined_history_report(base / "section_4_7_combined_history")
     elif choice == 11:
+        _run_tuning_plot_report(base / "section_4_8_tuning_plots")
+    elif choice == 12:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -642,6 +645,14 @@ def _run_comparison_report_en(out_dir) -> None:
     path = reporter.generate()
     if path:
         print(f"\n  File tersimpan: {path}")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_comparison_bar_report(out_dir) -> None:
+    reporter = ComparisonBarReporter(out_dir)
+    paths = reporter.generate()
+    if paths:
+        print(f"\n  {len(paths)} file bar chart tersimpan.")
     input("\n  Tekan Enter untuk kembali...")
 
 
