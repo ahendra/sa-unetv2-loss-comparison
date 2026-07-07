@@ -21,12 +21,12 @@ _DATASETS = [("drive", "DRIVE"), ("stare", "STARE")]
 _RC = {
     "font.family":     "sans-serif",
     "font.sans-serif": ["Helvetica", "Arial", "Helvetica Neue", "DejaVu Sans"],
-    "font.size":       8,
-    "axes.titlesize":  9,
-    "axes.labelsize":  8,
-    "xtick.labelsize": 8,
-    "ytick.labelsize": 8,
-    "legend.fontsize": 8,
+    "font.size":       10,
+    "axes.titlesize":  11,
+    "axes.labelsize":  10,
+    "xtick.labelsize": 10,
+    "ytick.labelsize": 10,
+    "legend.fontsize": 10,
     "lines.linewidth": 1.0,
     "axes.linewidth":  0.6,
 }
@@ -36,10 +36,10 @@ class ComparisonBarReporter:
     """Improved grouped bar chart comparison for journal publication.
 
     Generates bar_chart_drive.png and bar_chart_stare.png with:
-      - Larger individual panels (figsize 20 × 7.5·n_rows inches)
-      - Tighter inter-panel spacing (wspace 0.28, hspace 0.55)
-      - Helvetica / Arial 8 pt throughout
-      - Value labels on bars at 8 pt
+      - Larger individual panels (figsize 20 × 6.5·n_rows inches)
+      - Tight inter-panel spacing (wspace 0.28, hspace 0.38)
+      - Helvetica / Arial 10 pt throughout
+      - Value labels on bars at 10 pt
       - Last chart row horizontally centred
       - 300 DPI output
     """
@@ -99,13 +99,13 @@ class ComparisonBarReporter:
         last_row_off  = (n_cols - n_in_last_row) // 2 if n_in_last_row < n_cols else 0
 
         with matplotlib.rc_context(_RC):
-            fig = plt.figure(figsize=(20, 7.5 * n_rows))
+            fig = plt.figure(figsize=(20, 6.5 * n_rows))
             fig.patch.set_facecolor("#ffffff")
 
             gs = gridspec.GridSpec(
                 n_rows, n_cols,
                 figure=fig,
-                hspace=0.55,
+                hspace=0.38,
                 wspace=0.28,
                 left=0.05, right=0.97,
                 top=0.96, bottom=0.06,
@@ -113,7 +113,7 @@ class ComparisonBarReporter:
 
             fig.suptitle(
                 f"Loss Function Comparison — {dataset_label}",
-                fontsize=11, fontweight="bold",
+                fontsize=12, fontweight="bold",
             )
 
             # Build axes with centering for last row
@@ -151,15 +151,15 @@ class ComparisonBarReporter:
                     ax.bar(i, v, width=0.65, color=color, alpha=0.85,
                            edgecolor="white", label=loss_labels[i])
                     ax.text(i, v + label_offset, f"{v:.2f}",
-                            ha="center", va="bottom", fontsize=8, rotation=45)
+                            ha="center", va="bottom", fontsize=10, rotation=45)
 
                 ax.set_xticks(range(n_losses))
-                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=8)
-                ax.set_ylabel(_Y_AXIS_LABEL.get(mkey, "Score (%)"), fontsize=8)
-                ax.set_title(mlabel, fontsize=9, fontweight="bold", color=mcolor)
+                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=10)
+                ax.set_ylabel(_Y_AXIS_LABEL.get(mkey, "Score (%)"), fontsize=10)
+                ax.set_title(mlabel, fontsize=11, fontweight="bold", color=mcolor)
                 ax.set_xlim(-0.6, n_losses - 0.4)
                 ax.set_ylim(y_min, y_max)
-                ax.tick_params(axis="y", labelsize=8)
+                ax.tick_params(axis="y", labelsize=10)
                 ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
             handles, labels_leg = axes_list[0].get_legend_handles_labels()
@@ -168,7 +168,7 @@ class ComparisonBarReporter:
                 loc="lower center",
                 ncol=min(n_losses, 6),
                 bbox_to_anchor=(0.5, 0.01),
-                fontsize=8, framealpha=0.9,
+                fontsize=10, framealpha=0.9,
                 edgecolor="#dddddd",
             )
 
