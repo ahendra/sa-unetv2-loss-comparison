@@ -18,21 +18,17 @@ _Y_AXIS_LABEL    = {"betti0_error": "Error Count", "betti1_error": "Error Count"
 
 _DATASETS = [("drive", "DRIVE"), ("stare", "STARE")]
 
-# ── Typography ─────────────────────────────────────────────────────────────────
-# figsize width = 9 in → printed at A4 text-width (184 mm = 7.24 in): scale ≈ 0.80×
-# → 13 pt in figure  ≈ 10.4 pt on paper  (comfortable journal body text)
-# → 14 pt axes title ≈ 11.2 pt on paper
 _RC = {
     "font.family":     "sans-serif",
     "font.sans-serif": ["Helvetica", "Arial", "Helvetica Neue", "DejaVu Sans"],
-    "font.size":       13,
-    "axes.titlesize":  14,
-    "axes.labelsize":  13,
-    "xtick.labelsize": 13,
-    "ytick.labelsize": 13,
+    "font.size":       12,
+    "axes.titlesize":  13,
+    "axes.labelsize":  12,
+    "xtick.labelsize": 12,
+    "ytick.labelsize": 12,
     "legend.fontsize": 12,
     "lines.linewidth": 1.0,
-    "axes.linewidth":  0.7,
+    "axes.linewidth":  0.6,
 }
 
 
@@ -40,10 +36,9 @@ class ComparisonBarReporter:
     """Improved grouped bar chart comparison for journal publication.
 
     Generates bar_chart_drive.png and bar_chart_stare.png with:
-      - figsize 9 × 4.5·n_rows in  → ~0.80× scale at A4 text width
-      - Tight inter-panel spacing (wspace 0.25, hspace 0.32)
-      - Helvetica / Arial 13 pt body, 14 pt titles
-      - Value labels on bars at 11 pt
+      - figsize 20 × 7.5·n_rows in
+      - Helvetica / Arial 12 pt throughout
+      - Value labels on bars at 12 pt
       - Last chart row horizontally centred
       - 300 DPI output
     """
@@ -103,21 +98,21 @@ class ComparisonBarReporter:
         last_row_off  = (n_cols - n_in_last_row) // 2 if n_in_last_row < n_cols else 0
 
         with matplotlib.rc_context(_RC):
-            fig = plt.figure(figsize=(9, 4.5 * n_rows))
+            fig = plt.figure(figsize=(20, 7.5 * n_rows))
             fig.patch.set_facecolor("#ffffff")
 
             gs = gridspec.GridSpec(
                 n_rows, n_cols,
                 figure=fig,
-                hspace=0.32,
-                wspace=0.25,
-                left=0.07, right=0.98,
-                top=0.95, bottom=0.08,
+                hspace=0.55,
+                wspace=0.28,
+                left=0.05, right=0.97,
+                top=0.96, bottom=0.06,
             )
 
             fig.suptitle(
                 f"Loss Function Comparison — {dataset_label}",
-                fontsize=14, fontweight="bold",
+                fontsize=13, fontweight="bold",
             )
 
             # Build axes — last row centred
@@ -155,15 +150,15 @@ class ComparisonBarReporter:
                     ax.bar(i, v, width=0.65, color=color, alpha=0.85,
                            edgecolor="white", label=loss_labels[i])
                     ax.text(i, v + label_offset, f"{v:.2f}",
-                            ha="center", va="bottom", fontsize=11, rotation=45)
+                            ha="center", va="bottom", fontsize=12, rotation=45)
 
                 ax.set_xticks(range(n_losses))
-                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=13)
-                ax.set_ylabel(_Y_AXIS_LABEL.get(mkey, "Score (%)"), fontsize=13)
-                ax.set_title(mlabel, fontsize=14, fontweight="bold", color=mcolor)
+                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=12)
+                ax.set_ylabel(_Y_AXIS_LABEL.get(mkey, "Score (%)"), fontsize=12)
+                ax.set_title(mlabel, fontsize=13, fontweight="bold", color=mcolor)
                 ax.set_xlim(-0.6, n_losses - 0.4)
                 ax.set_ylim(y_min, y_max)
-                ax.tick_params(axis="y", labelsize=13)
+                ax.tick_params(axis="y", labelsize=12)
                 ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
             handles, labels_leg = axes_list[0].get_legend_handles_labels()
@@ -171,7 +166,7 @@ class ComparisonBarReporter:
                 handles, labels_leg,
                 loc="lower center",
                 ncol=min(n_losses, 6),
-                bbox_to_anchor=(0.5, 0.0),
+                bbox_to_anchor=(0.5, 0.01),
                 fontsize=12, framealpha=0.9,
                 edgecolor="#dddddd",
             )
