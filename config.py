@@ -8,7 +8,7 @@ PREPROCESSING_MODES = ("rgb", "clahe", "green", "green_clahe")
 # Global random seed — set the same value before every training run so that
 # weight initialisation and data shuffle are identical across all loss functions.
 # Change to None to disable fixed seeding (non-reproducible).
-RANDOM_SEED: int = None #42
+RANDOM_SEED: int = 42 #None
 
 
 BASE_DIR = Path(__file__).parent

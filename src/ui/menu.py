@@ -15,7 +15,8 @@ from src.tuning import LossTuner
 from src.reporting import (
     AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
     ComparisonBarReporter, ComparisonReporter, ComparisonReporterEN,
-    EnvironmentReporter, HistoryReporter, TuningPlotReporter, VisualizationReporter,
+    ComputationalTimeReporter, EnvironmentReporter, HistoryReporter,
+    TuningPlotReporter, VisualizationReporter,
 )
 
 
@@ -540,6 +541,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.6c Bar Chart Comparison — DRIVE + STARE (Journal, Helvetica 8pt)",
             "4.7  Training History Gabungan (DRIVE + STARE)",
             "4.8  Tuning Hyperparameter Loss — Regenerate Charts",
+            "4.9  Computational Time Analysis (Epochs + Benchmark + Scatter)",
             "Generate Semua Report",
         ],
         back_label="Kembali",
@@ -569,6 +571,8 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 11:
         _run_tuning_plot_report(base / "section_4_8_tuning_plots")
     elif choice == 12:
+        _run_computational_time_report(base / "section_4_9_computational_time")
+    elif choice == 13:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -674,6 +678,20 @@ def _run_tuning_plot_report(out_dir) -> None:
         print(f"\n  {len(paths)} file chart berhasil diregenerasi.")
     else:
         print("\n  [WARN] Tidak ada chart yang diregenerasi. Pastikan DB tuning sudah ada.")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_computational_time_report(out_dir) -> None:
+    print("\n  Computational Time Analysis")
+    print("  [1] Epochs to Convergence — dari history JSON yang sudah ada")
+    print("  [2] Micro-benchmark Training Step — SA-UNetV2 + GradientTape, data training nyata")
+    print("  [3] Scatter Plot — Epochs vs F1 Score")
+    print("\n  Analisis (1) dan (3) tidak memerlukan GPU.")
+    print("  Analisis (2) memerlukan GPU; pastikan sesi Colab terhubung ke GPU.\n")
+    reporter = ComputationalTimeReporter(out_dir)
+    paths = reporter.generate()
+    if paths:
+        print(f"\n  {len(paths)} file tersimpan di: {out_dir}")
     input("\n  Tekan Enter untuk kembali...")
 
 
