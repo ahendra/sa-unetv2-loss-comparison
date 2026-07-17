@@ -53,11 +53,11 @@ class ComputationalTimeReporter:
         self._out_dir.mkdir(parents=True, exist_ok=True)
         paths: List[Path] = []
 
-        print("\n  Memuat history dan hasil evaluasi...")
+        print("\n  Memuat riwayat pelatihan dan hasil evaluasi...")
         histories = self._load_all_histories()
         results   = self._load_all_results()
 
-        print("\n  [1/3] Epochs to Convergence...")
+        print("\n  [1/3] Jumlah Epoch hingga Konvergensi...")
         p1 = self._plot_epochs_convergence(histories)
         if p1:
             paths.append(p1)
@@ -67,8 +67,8 @@ class ComputationalTimeReporter:
         if p3:
             paths.append(p3)
 
-        print("\n  [2/3] Micro-benchmark Training Step...")
-        print("  (Menggunakan data training aug_clahe/, SA-UNetV2, GradientTape eksplisit)")
+        print("\n  [2/3] Mikro-Benchmark Langkah Pelatihan...")
+        print("  (Data pelatihan aug_clahe/, arsitektur SA-UNetV2, gradien dihitung secara eksplisit)")
         bench = self._run_all_benchmarks()
         if bench:
             env_info = self._get_env_info()
@@ -93,7 +93,7 @@ class ComputationalTimeReporter:
                     with open(p) as f:
                         histories[ds_name][loss_key] = json.load(f)
                 else:
-                    print(f"  [SKIP] {ds_name}/{loss_key}_history.json tidak ditemukan")
+                    print(f"  [LEWATI] {ds_name}/{loss_key}_history.json tidak ditemukan")
         return histories
 
     def _load_all_results(self) -> Dict:
@@ -115,7 +115,7 @@ class ComputationalTimeReporter:
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            print("  [WARN] matplotlib tidak terinstall, skip plot.")
+            print("  [PERINGATAN] matplotlib tidak terpasang, grafik dilewati.")
             return None
 
         loss_keys   = list(LOSS_FUNCTIONS.keys())
@@ -187,15 +187,15 @@ class ComputationalTimeReporter:
             if params:
                 return dict(params)
         # Fallback: global LOSS_PARAMS (may not match this dataset)
-        print(f"    [FALLBACK] Tuning JSON tidak ditemukan untuk {ds_name}/{loss_key} "
-              f"— menggunakan LOSS_PARAMS global dari config.py")
+        print(f"    [CADANGAN] File tuning JSON tidak ditemukan untuk {ds_name}/{loss_key} "
+              f"— menggunakan parameter global LOSS_PARAMS dari config.py")
         return dict(LOSS_PARAMS.get(loss_key, {}))
 
     def _run_all_benchmarks(self) -> Optional[Dict]:
         try:
             __import__("tensorflow")
         except ImportError:
-            print("  [WARN] TensorFlow tidak tersedia, skip benchmark.")
+            print("  [PERINGATAN] TensorFlow tidak tersedia, benchmark dilewati.")
             return None
 
         bench: Dict = {}
@@ -231,11 +231,11 @@ class ComputationalTimeReporter:
             y_batch = tf.constant(y_all[:n], dtype=tf.float32)
 
             print(f"  Batch {_DS_LABELS[ds_name]}: x={tuple(x_batch.shape)}, "
-                  f"y={tuple(y_batch.shape)} — dari aug_clahe/ (CLAHE sudah baked-in).")
+                  f"y={tuple(y_batch.shape)} — dari aug_clahe/ (prapemrosesan CLAHE telah tersimpan dalam data).")
             return x_batch, y_batch
 
         except Exception as exc:
-            print(f"  [WARN] Gagal memuat data benchmark ({ds_name}): {exc}")
+            print(f"  [PERINGATAN] Gagal memuat data benchmark ({ds_name}): {exc}")
             return None
 
     def _benchmark_dataset(self, cfg, ds_name: str) -> Optional[Dict]:
@@ -249,13 +249,26 @@ class ComputationalTimeReporter:
             return None
         x_batch, y_batch = batch
 
-        print(f"\n  Dataset: {_DS_LABELS[ds_name]} "
+        n_losses = len(LOSS_FUNCTIONS)
+        ds_label = _DS_LABELS[ds_name]
+        print(f"\n  ┌─ Dataset: {ds_label}  "
               f"(input={cfg.input_size}, batch={cfg.batch_size})")
+        print(f"  │  {n_losses} fungsi loss × "
+              f"({_N_WARMUP} pemanasan + {_N_TIMED} pengukuran) iterasi")
+        print(f"  │  Iterasi pemanasan ke-1 mencakup penyusunan graf komputasi (@tf.function),")
+        print(f"  │  proses ini dapat memakan waktu lebih lama (±10–60 detik, khususnya pada clDice).")
+        print(f"  └─────────────────────────────────────────────────────")
 
+        ds_t0   = time.perf_counter()
         timings: Dict = {}
-        for loss_key, loss_label in LOSS_FUNCTIONS.items():
-            print(f"  {loss_label[:24]:24s} ...", end=" ", flush=True)
 
+        for loss_idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
+            short = loss_label.replace(" (Baseline)", "")
+            print(f"\n  [{loss_idx + 1}/{n_losses}] {short}", flush=True)
+
+            # ── Build model ──────────────────────────────────────────────────
+            print("    Membangun model SA-UNetV2...", end=" ", flush=True)
+            t_build = time.perf_counter()
             set_global_seed(RANDOM_SEED)
             model     = build_sa_unetv2(
                 input_size=cfg.input_size,
@@ -266,6 +279,7 @@ class ComputationalTimeReporter:
             optimizer = tf.keras.optimizers.Adam(learning_rate=cfg.learning_rate)
             params    = self._load_loss_params_for_dataset(ds_name, loss_key)
             loss_fn   = _build_loss_from_params(loss_key, params)
+            print(f"selesai ({(time.perf_counter() - t_build):.1f}s)", flush=True)
 
             @tf.function
             def _step():
@@ -276,26 +290,41 @@ class ComputationalTimeReporter:
                 optimizer.apply_gradients(zip(grads, model.trainable_variables))
                 return loss_value
 
-            # Warmup — includes graph tracing on first call; excluded from timing
-            for _ in range(_N_WARMUP):
+            # ── Pemanasan — iterasi-1 menyusun graf komputasi (@tf.function) ──
+            print(f"    Pemanasan ({_N_WARMUP} iterasi, tidak dihitung sebagai waktu komputasi):")
+            for w in range(_N_WARMUP):
+                label = ("penyusunan graf komputasi (@tf.function)..."
+                         if w == 0 else f"iterasi ke-{w + 1}...")
+                print(f"      [{w + 1}/{_N_WARMUP}] {label}", end=" ", flush=True)
+                t0 = time.perf_counter()
                 _step()
+                print(f"({(time.perf_counter() - t0) * 1000:.0f} ms)", flush=True)
 
-            # Timed runs — .numpy() forces CPU-GPU sync so we measure full
-            # GPU execution time, not just kernel submission time.
+            # ── Pengukuran — .numpy() memastikan sinkronisasi CPU-GPU ────────
+            # print() dipanggil SETELAH elapsed dicatat — tidak masuk pengukuran
             elapsed_ms: List[float] = []
-            for _ in range(_N_TIMED):
+            for i in range(_N_TIMED):
                 t0 = time.perf_counter()
                 _step().numpy()
                 elapsed_ms.append((time.perf_counter() - t0) * 1000.0)
+                filled = "█" * (i + 1) + "░" * (_N_TIMED - i - 1)
+                print(f"\r    Pengukuran [{filled}] {i + 1}/{_N_TIMED}  "
+                      f"({elapsed_ms[-1]:.0f} ms)",
+                      end="", flush=True)
+            print(flush=True)
 
             mean_ms = float(np.mean(elapsed_ms))
             std_ms  = float(np.std(elapsed_ms))
             timings[loss_key] = {"mean_ms": mean_ms, "std_ms": std_ms}
-            print(f"{mean_ms:7.1f} ± {std_ms:.1f} ms")
+            print(f"    Hasil:  {mean_ms:.1f} ± {std_ms:.1f} ms  "
+                  f"(min={min(elapsed_ms):.0f} ms, maks={max(elapsed_ms):.0f} ms)",
+                  flush=True)
 
             del model, optimizer, _step
             tf.keras.backend.clear_session()
 
+        total_s = time.perf_counter() - ds_t0
+        print(f"\n  Benchmark {ds_label} selesai dalam {total_s / 60:.1f} menit.")
         return timings
 
     def _plot_benchmark(self, bench: Dict) -> Optional[Path]:
@@ -351,17 +380,17 @@ class ComputationalTimeReporter:
         return path
 
     def _print_benchmark_summary(self, bench: Dict) -> None:
-        print("\n  ── Benchmark Summary ──")
+        print("\n  ── Ringkasan Hasil Benchmark ──")
         for ds_name, timings in bench.items():
             baseline = timings.get("bce_mcc", {}).get("mean_ms", 1.0) or 1.0
             print(f"\n  {_DS_LABELS[ds_name]}  (baseline = bce_mcc = {baseline:.1f} ms)")
-            print(f"  {'Loss Function':22s}  {'Mean (ms)':>10}  {'Std (ms)':>9}  {'vs baseline':>12}")
+            print(f"  {'Fungsi Loss':22s}  {'Mean (ms)':>11}  {'Std (ms)':>9}  {'vs baseline':>12}")
             for loss_key, loss_label in LOSS_FUNCTIONS.items():
                 t   = timings.get(loss_key, {})
                 m   = t.get("mean_ms", 0)
                 s   = t.get("std_ms",  0)
                 rel = m / baseline
-                print(f"  {loss_label[:22]:22s}  {m:>10.1f}  {s:>9.1f}  {rel:>10.2f}×")
+                print(f"  {loss_label[:22]:22s}  {m:>11.1f}  {s:>9.1f}  {rel:>10.2f}×")
 
     def _save_benchmark_json(self, bench: Dict, env_info: dict) -> None:
         """Persist benchmark numbers + environment info to JSON."""
@@ -491,8 +520,8 @@ class ComputationalTimeReporter:
             from openpyxl.styles import Font, PatternFill, Alignment
             from openpyxl.utils import get_column_letter
         except ImportError:
-            print("  [WARN] openpyxl tidak terinstall, skip Excel. "
-                  "Install dengan: pip install openpyxl")
+            print("  [PERINGATAN] openpyxl tidak terpasang, file Excel dilewati. "
+                  "Pasang dengan: pip install openpyxl")
             return
 
         wb = Workbook()
