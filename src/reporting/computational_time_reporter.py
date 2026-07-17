@@ -62,18 +62,14 @@ class ComputationalTimeReporter:
             paths.append(p1)
 
         print("\n  [3/3] Scatter: Epochs vs F1...")
-        p3 = self._plot_scatter_epochs_f1(histories, results)
-        if p3:
-            paths.append(p3)
+        paths.extend(self._plot_scatter_epochs_f1(histories, results))
 
         print("\n  [2/3] Mikro-Benchmark Langkah Pelatihan...")
         print("  (Data pelatihan aug_clahe/, arsitektur SA-UNetV2, gradien dihitung secara eksplisit)")
         bench = self._run_all_benchmarks()
         if bench:
             env_info = self._get_env_info()
-            p2 = self._plot_benchmark(bench)
-            if p2:
-                paths.append(p2)
+            paths.extend(self._plot_benchmark(bench))
             self._print_benchmark_summary(bench)
             self._save_benchmark_json(bench, env_info)
             self._save_benchmark_excel(bench, env_info)
@@ -261,12 +257,8 @@ class ComputationalTimeReporter:
         ds_label  = _DS_LABELS[ds_name]
         print(f"\n  ┌─ Dataset: {ds_label}  "
               f"(input={cfg.input_size}, batch={cfg.batch_size})")
-        print(f"  │  {n_losses} fungsi loss × "
-              f"({_N_WARMUP} pemanasan + {n_batches} pengukuran) iterasi")
-        print(f"  │  Setiap iterasi pengukuran menggunakan batch gambar yang berbeda")
-        print(f"  │  ({n_batches} iterasi = 1 epoch penuh pada data pelatihan)")
-        print(f"  │  Iterasi pemanasan ke-1 mencakup penyusunan graf komputasi (@tf.function),")
-        print(f"  │  proses ini dapat memakan waktu lebih lama (±10–60 detik, khususnya pada clDice).")
+        print(f"  │  {n_losses} fungsi loss × {n_batches} langkah pengukuran (1 epoch penuh)")
+        print(f"  │  Setiap langkah menggunakan batch gambar yang berbeda")
         print(f"  └─────────────────────────────────────────────────────")
 
         ds_t0   = time.perf_counter()
@@ -300,16 +292,16 @@ class ComputationalTimeReporter:
                 optimizer.apply_gradients(zip(grads, model.trainable_variables))
                 return loss_value
 
-            # ── Pemanasan — iterasi-1 menyusun graf komputasi (@tf.function) ─
-            print(f"    Pemanasan ({_N_WARMUP} iterasi, tidak dihitung sebagai waktu komputasi):")
+            # ── Pemanasan — berjalan di latar, tidak ditampilkan ke UI ─────────
+            # Iterasi ke-1 menyusun graf komputasi (@tf.function) — bisa 10–60 detik.
+            # .numpy() wajib di setiap iterasi untuk memastikan GPU benar-benar selesai
+            # sebelum timer pengukuran dinyalakan.
+            print("    Menyiapkan pengukuran...", end=" ", flush=True)
+            t_warmup = time.perf_counter()
             for w in range(_N_WARMUP):
-                label = ("penyusunan graf komputasi (@tf.function)..."
-                         if w == 0 else f"iterasi ke-{w + 1}...")
-                print(f"      [{w + 1}/{_N_WARMUP}] {label}", end=" ", flush=True)
                 x_b, y_b = batches[w % n_batches]
-                t0 = time.perf_counter()
-                _step(x_b, y_b)
-                print(f"({(time.perf_counter() - t0) * 1000:.0f} ms)", flush=True)
+                _step(x_b, y_b).numpy()
+            print(f"selesai ({(time.perf_counter() - t_warmup):.1f}s)", flush=True)
 
             # ── Pengukuran — 1 epoch, batch berbeda tiap iterasi ─────────────
             # print() dipanggil SETELAH elapsed dicatat — tidak masuk pengukuran
@@ -340,57 +332,72 @@ class ComputationalTimeReporter:
         print(f"\n  Benchmark {ds_label} selesai dalam {total_s / 60:.1f} menit.")
         return timings
 
-    def _plot_benchmark(self, bench: Dict) -> Optional[Path]:
+    def _plot_benchmark(self, bench: Dict) -> List[Path]:
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            return None
+            return []
 
         loss_keys   = list(LOSS_FUNCTIONS.keys())
         loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
-        ds_avail    = [d for d in ("drive", "stare") if d in bench]
-        n_ds        = len(ds_avail)
+        paths: List[Path] = []
 
         with matplotlib.rc_context(_RC):
-            fig, axes = plt.subplots(1, n_ds, figsize=(8 * n_ds, 5), squeeze=False)
-            fig.patch.set_facecolor("#ffffff")
-            fig.suptitle("Computation Time per Training Step per Loss Function",
-                         fontsize=12, fontweight="bold")
+            for ds_name in ("drive", "stare"):
+                if ds_name not in bench:
+                    continue
 
-            for col, ds_name in enumerate(ds_avail):
-                ax      = axes[0][col]
-                t       = bench[ds_name]
-                means   = [t.get(k, {}).get("mean_ms", 0) for k in loss_keys]
-                stds    = [t.get(k, {}).get("std_ms",  0) for k in loss_keys]
-                colors  = [LOSS_COLORS.get(k, "#aaaaaa") for k in loss_keys]
+                t      = bench[ds_name]
+                means  = [t.get(k, {}).get("mean_ms", 0.0) for k in loss_keys]
+                stds   = [t.get(k, {}).get("std_ms",  0.0) for k in loss_keys]
+                colors = [LOSS_COLORS.get(k, "#aaaaaa") for k in loss_keys]
+
+                # Y-axis: mulai dari 90% nilai minimum supaya perbedaan antar bar terlihat
+                valid_means = [m for m in means if m > 0]
+                y_min    = max(0.0, min(valid_means) * 0.90) if valid_means else 0.0
+                max_std  = max(stds) if stds else 0.0
+                # Ruang headroom: jarak dari puncak bar tertinggi ke tepi atas
+                # cukup untuk teks label + error bar cap tanpa overlap
+                headroom = max_std + (max(means) - y_min) * 0.12
+                y_max    = max(means) + max_std + headroom
+
+                fig, ax = plt.subplots(figsize=(9, 5))
+                fig.patch.set_facecolor("#ffffff")
 
                 x    = np.arange(len(loss_keys))
                 bars = ax.bar(x, means, width=0.65, color=colors, alpha=0.85,
                               edgecolor="white", yerr=stds, capsize=4,
                               error_kw={"elinewidth": 1.2, "ecolor": "#333333"})
 
-                cap = (max(stds) if stds else 0)
-                for bar, m in zip(bars, means):
+                for bar, m, s in zip(bars, means, stds):
                     if m > 0:
+                        # Tempatkan teks di atas ujung error bar agar tidak overlap
+                        text_y = m + s + (y_max - y_min) * 0.02
                         ax.text(bar.get_x() + bar.get_width() / 2,
-                                bar.get_height() + cap * 0.15 + 1,
-                                f"{m:.0f}", ha="center", va="bottom", fontsize=9)
+                                text_y, f"{m:.1f}",
+                                ha="center", va="bottom", fontsize=9)
 
                 ax.set_xticks(x)
                 ax.set_xticklabels(loss_labels, rotation=20, ha="right")
                 ax.set_ylabel("Time per Step (ms)")
-                ax.set_title(_DS_LABELS[ds_name], fontweight="bold")
+                ax.set_title(
+                    f"Computation Time per Training Step — {_DS_LABELS[ds_name]}",
+                    fontweight="bold",
+                )
+                ax.set_ylim(y_min, y_max)
                 ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
-            plt.tight_layout(rect=[0, 0, 1, 0.92])
-            path = self._out_dir / "benchmark_training_step.png"
-            fig.savefig(str(path), dpi=300, bbox_inches="tight",
-                        facecolor="white", edgecolor="none")
-            plt.close(fig)
-            print(f"  Tersimpan: {path.name}")
-        return path
+                plt.tight_layout()
+                path = self._out_dir / f"benchmark_{ds_name}.png"
+                fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                            facecolor="white", edgecolor="none")
+                plt.close(fig)
+                print(f"  Tersimpan: {path.name}")
+                paths.append(path)
+
+        return paths
 
     def _print_benchmark_summary(self, bench: Dict) -> None:
         print("\n  ── Ringkasan Hasil Benchmark ──")
@@ -659,26 +666,21 @@ class ComputationalTimeReporter:
 
     # ── Analysis 3: Scatter Epochs vs F1 ─────────────────────────────────────
 
-    def _plot_scatter_epochs_f1(self, histories: Dict, results: Dict) -> Optional[Path]:
+    def _plot_scatter_epochs_f1(self, histories: Dict, results: Dict) -> List[Path]:
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            return None
+            return []
 
         loss_keys = list(LOSS_FUNCTIONS.keys())
+        paths: List[Path] = []
 
         with matplotlib.rc_context(_RC):
-            fig, axes = plt.subplots(1, 2, figsize=(14, 5))
-            fig.patch.set_facecolor("#ffffff")
-            fig.suptitle("Convergence Speed vs Segmentation Performance",
-                         fontsize=12, fontweight="bold")
-
-            for ax_idx, (ds_name, _) in enumerate(_DATASETS):
-                ax      = axes[ax_idx]
-                plotted = False
-
+            for ds_name, _ in _DATASETS:
+                # Kumpulkan poin data dulu untuk menghitung batas sumbu
+                points = []
                 for loss_key in loss_keys:
                     h = histories[ds_name].get(loss_key)
                     r = results[ds_name].get(loss_key)
@@ -688,32 +690,63 @@ class ComputationalTimeReporter:
                     f1     = r.get("f1")
                     if not epochs or f1 is None:
                         continue
-
-                    color = LOSS_COLORS.get(loss_key, "#aaaaaa")
                     short = (LOSS_FUNCTIONS[loss_key]
                              .replace(" (Baseline)", "")
                              .replace(" Loss", "")
                              .strip())
-                    ax.scatter(epochs, f1, s=90, color=color, zorder=5,
-                               edgecolors="white", linewidths=0.8)
-                    ax.annotate(short, (epochs, f1),
-                                textcoords="offset points", xytext=(6, 4),
-                                fontsize=9, color=color)
-                    plotted = True
+                    color = LOSS_COLORS.get(loss_key, "#aaaaaa")
+                    points.append((epochs, f1, short, color))
 
-                ax.set_xlabel("Epochs to Convergence")
-                ax.set_ylabel("F1 Score (%)")
-                ax.set_title(_DS_LABELS[ds_name], fontweight="bold")
-                ax.grid(alpha=0.3, linewidth=0.5)
-                if not plotted:
+                fig, ax = plt.subplots(figsize=(8, 5))
+                fig.patch.set_facecolor("#ffffff")
+                ax.set_title(
+                    f"Scatter: Epochs vs F1 — {_DS_LABELS[ds_name]}",
+                    fontweight="bold",
+                )
+
+                if not points:
                     ax.text(0.5, 0.5, "Data tidak tersedia",
                             transform=ax.transAxes,
                             ha="center", va="center", color="gray", fontsize=11)
+                else:
+                    all_x = [p[0] for p in points]
+                    all_y = [p[1] for p in points]
+                    x_min, x_max = min(all_x), max(all_x)
+                    x_span   = max(x_max - x_min, 1)
+                    # Tambah margin kiri-kanan agar anotasi tidak terpotong tepi grafik
+                    x_margin = x_span * 0.12
+                    ax.set_xlim(x_min - x_margin, x_max + x_margin)
+                    x_threshold = x_min + x_span * 0.85  # titik di atas 85% rentang X
 
-            plt.tight_layout(rect=[0, 0, 1, 0.92])
-            path = self._out_dir / "scatter_epochs_vs_f1.png"
-            fig.savefig(str(path), dpi=300, bbox_inches="tight",
-                        facecolor="white", edgecolor="none")
-            plt.close(fig)
-            print(f"  Tersimpan: {path.name}")
-        return path
+                    for epochs, f1, short, color in points:
+                        ax.scatter(epochs, f1, s=90, color=color, zorder=5,
+                                   edgecolors="white", linewidths=0.8)
+                        # Anotasi ke kanan jika masih ada ruang; ke kiri jika mendekati tepi
+                        if epochs >= x_threshold:
+                            ax.annotate(short, (epochs, f1),
+                                        textcoords="offset points",
+                                        xytext=(-8, 4), ha="right",
+                                        fontsize=9, color=color)
+                        else:
+                            ax.annotate(short, (epochs, f1),
+                                        textcoords="offset points",
+                                        xytext=(6, 4), ha="left",
+                                        fontsize=9, color=color)
+
+                    y_span   = max(max(all_y) - min(all_y), 0.5)
+                    y_margin = y_span * 0.15
+                    ax.set_ylim(min(all_y) - y_margin, max(all_y) + y_margin)
+
+                ax.set_xlabel("Epochs to Convergence")
+                ax.set_ylabel("F1 Score (%)")
+                ax.grid(alpha=0.3, linewidth=0.5)
+
+                plt.tight_layout()
+                path = self._out_dir / f"scatter_{ds_name}.png"
+                fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                            facecolor="white", edgecolor="none")
+                plt.close(fig)
+                print(f"  Tersimpan: {path.name}")
+                paths.append(path)
+
+        return paths
