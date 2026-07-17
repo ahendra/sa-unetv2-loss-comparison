@@ -19,7 +19,7 @@ from .palette import LOSS_COLORS
 _DATASETS = [("drive", DriveConfig), ("stare", StareConfig)]
 _DS_LABELS = {"drive": "DRIVE", "stare": "STARE"}
 _N_WARMUP  = 3
-_N_TIMED   = 10
+_BAR_WIDTH = 30   # lebar progress bar (karakter) — independen dari jumlah batch
 
 _RC = {
     "font.family":     "sans-serif",
@@ -206,33 +206,42 @@ class ComputationalTimeReporter:
                 bench[ds_name] = result
         return bench or None
 
-    def _load_benchmark_batch(self, cfg, ds_name: str) -> Optional[Tuple]:
-        """Load training data (aug_clahe/) and return (x_batch, y_batch) as
-        tf.constant tensors.
+    def _load_benchmark_batches(self, cfg, ds_name: str) -> Optional[List[Tuple]]:
+        """Muat semua data pelatihan (aug_clahe/) dan susun menjadi daftar batch tensor.
 
-        Training data is used because:
-        - CLAHE preprocessing is already baked in at augmentation time.
-        - Both x and y are already padded to model input size (target_h × target_w).
-        - No on-the-fly preprocessing or label padding required.
-        - Consistent with the actual training distribution.
+        Semua batch di-pre-load ke GPU sebelum loop pengukuran dimulai,
+        sehingga transfer data host→GPU tidak ikut terukur dalam timing.
+        Setiap iterasi pengukuran menggunakan batch gambar yang berbeda
+        (1 epoch penuh = semua batch dalam data pelatihan).
         """
         try:
             import tensorflow as tf
 
             if ds_name == "drive":
-                loader      = DriveDataLoader(cfg)
+                loader       = DriveDataLoader(cfg)
                 x_all, y_all = loader.load_train()
             else:
-                loader      = StareDataLoader(cfg)
+                loader       = StareDataLoader(cfg)
                 x_all, y_all = loader.load_train()
 
-            n       = min(cfg.batch_size, len(x_all))
-            x_batch = tf.constant(x_all[:n], dtype=tf.float32)
-            y_batch = tf.constant(y_all[:n], dtype=tf.float32)
+            bs        = cfg.batch_size
+            n_images  = len(x_all)
+            n_batches = n_images // bs
 
-            print(f"  Batch {_DS_LABELS[ds_name]}: x={tuple(x_batch.shape)}, "
-                  f"y={tuple(y_batch.shape)} — dari aug_clahe/ (prapemrosesan CLAHE telah tersimpan dalam data).")
-            return x_batch, y_batch
+            print(f"  Data {_DS_LABELS[ds_name]}: {n_images} gambar → "
+                  f"{n_batches} batch (batch_size={bs}) — dari aug_clahe/ "
+                  f"(prapemrosesan CLAHE telah tersimpan dalam data).")
+            print(f"  Menyiapkan {n_batches} batch tensor di GPU...", end=" ", flush=True)
+
+            device = "/GPU:0" if tf.config.list_physical_devices("GPU") else "/CPU:0"
+            with tf.device(device):
+                batches = [
+                    (tf.constant(x_all[i * bs:(i + 1) * bs], dtype=tf.float32),
+                     tf.constant(y_all[i * bs:(i + 1) * bs], dtype=tf.float32))
+                    for i in range(n_batches)
+                ]
+            print("selesai.", flush=True)
+            return batches
 
         except Exception as exc:
             print(f"  [PERINGATAN] Gagal memuat data benchmark ({ds_name}): {exc}")
@@ -244,17 +253,19 @@ class ComputationalTimeReporter:
         except ImportError:
             return None
 
-        batch = self._load_benchmark_batch(cfg, ds_name)
-        if batch is None:
+        batches = self._load_benchmark_batches(cfg, ds_name)
+        if not batches:
             return None
-        x_batch, y_batch = batch
 
-        n_losses = len(LOSS_FUNCTIONS)
-        ds_label = _DS_LABELS[ds_name]
+        n_batches = len(batches)
+        n_losses  = len(LOSS_FUNCTIONS)
+        ds_label  = _DS_LABELS[ds_name]
         print(f"\n  ┌─ Dataset: {ds_label}  "
               f"(input={cfg.input_size}, batch={cfg.batch_size})")
         print(f"  │  {n_losses} fungsi loss × "
-              f"({_N_WARMUP} pemanasan + {_N_TIMED} pengukuran) iterasi")
+              f"({_N_WARMUP} pemanasan + {n_batches} pengukuran) iterasi")
+        print(f"  │  Setiap iterasi pengukuran menggunakan batch gambar yang berbeda")
+        print(f"  │  ({n_batches} iterasi = 1 epoch penuh pada data pelatihan)")
         print(f"  │  Iterasi pemanasan ke-1 mencakup penyusunan graf komputasi (@tf.function),")
         print(f"  │  proses ini dapat memakan waktu lebih lama (±10–60 detik, khususnya pada clDice).")
         print(f"  └─────────────────────────────────────────────────────")
@@ -266,7 +277,7 @@ class ComputationalTimeReporter:
             short = loss_label.replace(" (Baseline)", "")
             print(f"\n  [{loss_idx + 1}/{n_losses}] {short}", flush=True)
 
-            # ── Build model ──────────────────────────────────────────────────
+            # ── Bangun model ─────────────────────────────────────────────────
             print("    Membangun model SA-UNetV2...", end=" ", flush=True)
             t_build = time.perf_counter()
             set_global_seed(RANDOM_SEED)
@@ -282,40 +293,45 @@ class ComputationalTimeReporter:
             print(f"selesai ({(time.perf_counter() - t_build):.1f}s)", flush=True)
 
             @tf.function
-            def _step():
+            def _step(x_b, y_b):
                 with tf.GradientTape() as tape:
-                    y_pred     = model(x_batch, training=True)
-                    loss_value = loss_fn(y_batch, y_pred)
+                    y_pred     = model(x_b, training=True)
+                    loss_value = loss_fn(y_b, y_pred)
                 grads = tape.gradient(loss_value, model.trainable_variables)
                 optimizer.apply_gradients(zip(grads, model.trainable_variables))
                 return loss_value
 
-            # ── Pemanasan — iterasi-1 menyusun graf komputasi (@tf.function) ──
+            # ── Pemanasan — iterasi-1 menyusun graf komputasi (@tf.function) ─
             print(f"    Pemanasan ({_N_WARMUP} iterasi, tidak dihitung sebagai waktu komputasi):")
             for w in range(_N_WARMUP):
                 label = ("penyusunan graf komputasi (@tf.function)..."
                          if w == 0 else f"iterasi ke-{w + 1}...")
                 print(f"      [{w + 1}/{_N_WARMUP}] {label}", end=" ", flush=True)
+                x_b, y_b = batches[w % n_batches]
                 t0 = time.perf_counter()
-                _step()
+                _step(x_b, y_b)
                 print(f"({(time.perf_counter() - t0) * 1000:.0f} ms)", flush=True)
 
-            # ── Pengukuran — .numpy() memastikan sinkronisasi CPU-GPU ────────
+            # ── Pengukuran — 1 epoch, batch berbeda tiap iterasi ─────────────
             # print() dipanggil SETELAH elapsed dicatat — tidak masuk pengukuran
             elapsed_ms: List[float] = []
-            for i in range(_N_TIMED):
+            for i in range(n_batches):
+                x_b, y_b = batches[i]
                 t0 = time.perf_counter()
-                _step().numpy()
+                _step(x_b, y_b).numpy()
                 elapsed_ms.append((time.perf_counter() - t0) * 1000.0)
-                filled = "█" * (i + 1) + "░" * (_N_TIMED - i - 1)
-                print(f"\r    Pengukuran [{filled}] {i + 1}/{_N_TIMED}  "
+                # Progress bar diskala ke _BAR_WIDTH agar tidak meluap untuk dataset besar
+                filled_n = round((i + 1) / n_batches * _BAR_WIDTH)
+                bar = "█" * filled_n + "░" * (_BAR_WIDTH - filled_n)
+                print(f"\r    Pengukuran [{bar}] {i + 1}/{n_batches}  "
                       f"({elapsed_ms[-1]:.0f} ms)",
                       end="", flush=True)
             print(flush=True)
 
             mean_ms = float(np.mean(elapsed_ms))
             std_ms  = float(np.std(elapsed_ms))
-            timings[loss_key] = {"mean_ms": mean_ms, "std_ms": std_ms}
+            timings[loss_key] = {"mean_ms": mean_ms, "std_ms": std_ms,
+                                 "n_steps": n_batches}
             print(f"    Hasil:  {mean_ms:.1f} ± {std_ms:.1f} ms  "
                   f"(min={min(elapsed_ms):.0f} ms, maks={max(elapsed_ms):.0f} ms)",
                   flush=True)
@@ -323,6 +339,7 @@ class ComputationalTimeReporter:
             del model, optimizer, _step
             tf.keras.backend.clear_session()
 
+        del batches
         total_s = time.perf_counter() - ds_t0
         print(f"\n  Benchmark {ds_label} selesai dalam {total_s / 60:.1f} menit.")
         return timings
@@ -383,7 +400,9 @@ class ComputationalTimeReporter:
         print("\n  ── Ringkasan Hasil Benchmark ──")
         for ds_name, timings in bench.items():
             baseline = timings.get("bce_mcc", {}).get("mean_ms", 1.0) or 1.0
-            print(f"\n  {_DS_LABELS[ds_name]}  (baseline = bce_mcc = {baseline:.1f} ms)")
+            n_steps  = next(iter(timings.values()), {}).get("n_steps", 0)
+            print(f"\n  {_DS_LABELS[ds_name]}  "
+                  f"(baseline = bce_mcc = {baseline:.1f} ms | {n_steps} langkah = 1 epoch)")
             print(f"  {'Fungsi Loss':22s}  {'Mean (ms)':>11}  {'Std (ms)':>9}  {'vs baseline':>12}")
             for loss_key, loss_label in LOSS_FUNCTIONS.items():
                 t   = timings.get(loss_key, {})
@@ -397,12 +416,12 @@ class ComputationalTimeReporter:
         output: Dict = {
             "environment": env_info,
             "n_warmup":    _N_WARMUP,
-            "n_timed":     _N_TIMED,
             "results":     {},
         }
         for ds_name, timings in bench.items():
             baseline = timings.get("bce_mcc", {}).get("mean_ms", 1.0) or 1.0
-            output["results"][ds_name] = {}
+            n_steps  = next(iter(timings.values()), {}).get("n_steps", 0)
+            output["results"][ds_name] = {"n_steps_per_epoch": n_steps}
             for loss_key in LOSS_FUNCTIONS:
                 t = timings.get(loss_key, {})
                 m = t.get("mean_ms", 0.0)
@@ -583,10 +602,13 @@ class ComputationalTimeReporter:
 
         # Benchmark metadata rows (below data)
         meta_row = len(loss_keys) + 3
-        ws.cell(row=meta_row,     column=1, value="Warmup runs").font = bold_font
-        ws.cell(row=meta_row,     column=2, value=_N_WARMUP)
-        ws.cell(row=meta_row + 1, column=1, value="Timed runs").font = bold_font
-        ws.cell(row=meta_row + 1, column=2, value=_N_TIMED)
+        ws.cell(row=meta_row, column=1, value="Warmup runs").font = bold_font
+        ws.cell(row=meta_row, column=2, value=_N_WARMUP)
+        ws.cell(row=meta_row + 1, column=1,
+                value="Timed runs (langkah/epoch)").font = bold_font
+        for ds_idx, ds in enumerate(ds_avail):
+            n_steps = next(iter(bench.get(ds, {}).values()), {}).get("n_steps", "N/A")
+            ws.cell(row=meta_row + 1, column=2 + ds_idx * 3, value=n_steps)
 
         # Auto column width
         for col_cells in ws.columns:
@@ -622,10 +644,12 @@ class ComputationalTimeReporter:
                 (f"{p} — Memory Used  (MB)",    str(gpu.get("memory_used_mb",  ""))),
                 (f"{p} — Driver Version",       gpu.get("driver_version",  "")),
             ]
-        rows += [
-            ("Warmup Runs",  str(_N_WARMUP)),
-            ("Timed Runs",   str(_N_TIMED)),
-        ]
+        rows += [("Warmup Runs", str(_N_WARMUP))]
+        for ds in ("drive", "stare"):
+            if ds in bench:
+                n_steps = next(iter(bench[ds].values()), {}).get("n_steps", "N/A")
+                rows.append((f"Timed Runs — {_DS_LABELS[ds]} (langkah/epoch)",
+                              str(n_steps)))
         for r, (k, v) in enumerate(rows, 2):
             ws2.cell(row=r, column=1, value=k)
             ws2.cell(row=r, column=2, value=v)
