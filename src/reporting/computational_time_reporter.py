@@ -19,7 +19,6 @@ from .palette import LOSS_COLORS
 _DATASETS = [("drive", DriveConfig), ("stare", StareConfig)]
 _DS_LABELS = {"drive": "DRIVE", "stare": "STARE"}
 _N_WARMUP  = 3
-_BAR_WIDTH = 30   # lebar progress bar (karakter) — independen dari jumlah batch
 
 _RC = {
     "font.family":     "sans-serif",
@@ -314,24 +313,21 @@ class ComputationalTimeReporter:
 
             # ── Pengukuran — 1 epoch, batch berbeda tiap iterasi ─────────────
             # print() dipanggil SETELAH elapsed dicatat — tidak masuk pengukuran
+            w = len(str(n_batches))  # lebar angka untuk alignment, mis. 2 untuk 29/93
+            print(f"    Pengukuran ({n_batches} langkah = 1 epoch):")
             elapsed_ms: List[float] = []
             for i in range(n_batches):
                 x_b, y_b = batches[i]
                 t0 = time.perf_counter()
                 _step(x_b, y_b).numpy()
                 elapsed_ms.append((time.perf_counter() - t0) * 1000.0)
-                # Progress bar diskala ke _BAR_WIDTH agar tidak meluap untuk dataset besar
-                filled_n = round((i + 1) / n_batches * _BAR_WIDTH)
-                bar = "█" * filled_n + "░" * (_BAR_WIDTH - filled_n)
-                print(f"\r    Pengukuran [{bar}] {i + 1}/{n_batches}  "
-                      f"({elapsed_ms[-1]:.0f} ms)",
-                      end="", flush=True)
-            print(flush=True)
+                print(f"      [{i + 1:{w}d}/{n_batches}] ({elapsed_ms[-1]:.0f} ms)",
+                      flush=True)
 
             mean_ms = float(np.mean(elapsed_ms))
             std_ms  = float(np.std(elapsed_ms))
             timings[loss_key] = {"mean_ms": mean_ms, "std_ms": std_ms,
-                                 "n_steps": n_batches}
+                                 "n_steps": n_batches, "steps_ms": elapsed_ms}
             print(f"    Hasil:  {mean_ms:.1f} ± {std_ms:.1f} ms  "
                   f"(min={min(elapsed_ms):.0f} ms, maks={max(elapsed_ms):.0f} ms)",
                   flush=True)
@@ -430,6 +426,7 @@ class ComputationalTimeReporter:
                     "mean_ms":              round(m, 3),
                     "std_ms":               round(s, 3),
                     "relative_to_baseline": round(m / baseline, 4) if baseline else 0.0,
+                    "steps_ms":             [round(v, 1) for v in t.get("steps_ms", [])],
                 }
         path = self._out_dir / "benchmark_results.json"
         with open(path, "w") as f:
