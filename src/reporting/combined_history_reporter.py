@@ -117,7 +117,7 @@ class CombinedHistoryReporter:
                         ax.text(0.5, 0.5, "—", ha="center", va="center",
                                 transform=ax.transAxes, fontsize=11, color="#bbb")
                     else:
-                        self._draw_curves(ax, history)
+                        self._draw_curves(ax, history, col_idx)
 
                     # ── Axis scales ───────────────────────────────────────────
                     ax.set_xlim(_X_LIM)
@@ -200,12 +200,11 @@ class CombinedHistoryReporter:
         with open(path) as f:
             return json.load(f)
 
-    def _draw_curves(self, ax, history: dict) -> None:
+    def _draw_curves(self, ax, history: dict, col_idx: int = 1) -> None:
         """Plot train/val curves, best-epoch marker, and annotation.
 
-        Also sets the y-axis limits from the actual data so each loss function
-        is shown at its native scale (loss value ranges differ fundamentally
-        across functions and cannot share a meaningful common y-axis).
+        col_idx is used to avoid overlapping the Best-epoch box with the
+        DRIVE/STARE dataset label that sits in the upper-left of column 0.
         """
         train_loss = history.get("loss", [])
         val_loss   = history.get("val_loss", [])
@@ -219,7 +218,7 @@ class CombinedHistoryReporter:
         # The steep initial drop (first 40%) may render above the top limit —
         # matplotlib clips it cleanly without distorting the convergence region.
         n = len(train_loss)
-        tail_start = max(1, int(n * 0.25))
+        tail_start = max(1, int(n * 0.10))
         tail_vals = [v for v in (train_loss[tail_start:] + val_loss[tail_start:]) if v == v]
         ref_vals  = tail_vals if tail_vals else [v for v in train_loss + val_loss if v == v]
         if ref_vals:
@@ -232,13 +231,20 @@ class CombinedHistoryReporter:
             best_val = min(val_loss)
             ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
 
-            # Best-epoch annotation — placed at vertical centre (0.50) to
-            # avoid overlap with the DRIVE/STARE label in the upper-left.
+            # Best-epoch annotation.
+            # Col 0: DRIVE/STARE label occupies upper-left → place box at
+            #        lower-right to avoid overlap.
+            # Col 1+: no conflicting label → place box at upper-right.
+            if col_idx == 0:
+                ann_y, ann_va = 0.04, "bottom"
+            else:
+                ann_y, ann_va = 0.96, "top"
+
             ax.text(
-                0.97, 0.50,
-                f"Best epoch: {best_ep}\n(val_loss={best_val:.5f})",
+                0.97, ann_y,
+                f"Best: ep.{best_ep}\n({best_val:.5f})",
                 transform=ax.transAxes,
-                fontsize=5, ha="right", va="center",
+                fontsize=5, ha="right", va=ann_va,
                 color="#222222",
                 bbox=dict(boxstyle="square,pad=0.22",
                           facecolor="white", edgecolor="#cccccc",
