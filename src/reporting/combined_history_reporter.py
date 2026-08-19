@@ -218,7 +218,7 @@ class CombinedHistoryReporter:
         # The steep initial drop (first 40%) may render above the top limit —
         # matplotlib clips it cleanly without distorting the convergence region.
         n = len(train_loss)
-        tail_start = max(1, int(n * 0.10))
+        tail_start = max(1, int(n * 0.05))
         tail_vals = [v for v in (train_loss[tail_start:] + val_loss[tail_start:]) if v == v]
         ref_vals  = tail_vals if tail_vals else [v for v in train_loss + val_loss if v == v]
         if ref_vals:
@@ -236,7 +236,7 @@ class CombinedHistoryReporter:
             #        lower-right to avoid overlap.
             # Col 1+: no conflicting label → place box at upper-right.
             if col_idx == 0:
-                ann_y, ann_va = 0.04, "bottom"
+                ann_y, ann_va = 0.50, "center"
             else:
                 ann_y, ann_va = 0.96, "top"
 
