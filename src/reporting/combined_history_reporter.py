@@ -123,14 +123,11 @@ class CombinedHistoryReporter:
                     ax.set_xlim(_X_LIM)
                     ax.set_xticks(_X_TICKS)
 
-                    # 4 Y-ticks per subplot — enough detail without label crowding
-                    ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune="both"))
-
-                    # Max 3 decimal places; use 2 only when the range is large (≥ 0.5)
-                    y_lo, y_hi = ax.get_ylim()
-                    y_range = y_hi - y_lo if y_hi != y_lo else 1e-6
-                    y_fmt = "%.2f" if y_range >= 0.5 else "%.3f"
-                    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter(y_fmt))
+                    # Fixed ticks — same on every subplot now that Y is normalized [0,1]
+                    ax.yaxis.set_major_locator(
+                        ticker.FixedLocator([0.00, 0.25, 0.50, 0.75, 1.00])
+                    )
+                    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.2f"))
 
                     ax.tick_params(axis="both", length=2.5, pad=2)
                     ax.grid(True, alpha=0.25, lw=0.5, color="#888888")
@@ -141,7 +138,7 @@ class CombinedHistoryReporter:
                     # Axis labels: x on both rows, y on leftmost column only
                     ax.set_xlabel("Epoch", fontsize=7.5, labelpad=3)
                     if col_idx == 0:
-                        ax.set_ylabel("Loss", fontsize=7.5, labelpad=3)
+                        ax.set_ylabel("Normalized Loss", fontsize=7.5, labelpad=3)
 
                     # Column header: top row only
                     if row_idx == 0:
@@ -210,30 +207,30 @@ class CombinedHistoryReporter:
         val_loss   = history.get("val_loss", [])
         epochs     = list(range(1, len(train_loss) + 1))
 
-        ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.0, ls="-")
-        ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.0, ls="-")
+        def _minmax(data: list) -> list:
+            lo, hi = min(data), max(data)
+            span = max(hi - lo, 1e-9)
+            return [(v - lo) / span for v in data]
 
-        # Y-range calibrated to the settled/convergence phase (last 60% of epochs)
-        # so epoch-to-epoch fluctuations occupy most of the vertical space.
-        # The steep initial drop (first 40%) may render above the top limit —
-        # matplotlib clips it cleanly without distorting the convergence region.
-        n = len(train_loss)
-        tail_start = max(1, int(n * 0.05))
-        tail_vals = [v for v in (train_loss[tail_start:] + val_loss[tail_start:]) if v == v]
-        ref_vals  = tail_vals if tail_vals else [v for v in train_loss + val_loss if v == v]
-        if ref_vals:
-            vmin, vmax = min(ref_vals), max(ref_vals)
-            span = max(vmax - vmin, 1e-6)
-            ax.set_ylim(max(0.0, vmin - span * 0.05), vmax + span * 0.08)
+        # Normalize each curve independently to [0, 1] so all 12 subplots
+        # share the same scale — convergence dynamics are directly comparable.
+        train_norm = _minmax(train_loss) if len(train_loss) > 1 else train_loss
+        val_norm   = _minmax(val_loss)   if len(val_loss)   > 1 else val_loss
+
+        ax.plot(epochs, train_norm, color=_C_TRAIN, lw=1.0, ls="-")
+        ax.plot(epochs, val_norm,   color=_C_VAL,   lw=1.0, ls="-")
+
+        # Fixed Y range for all subplots — slight padding so curves don't
+        # touch the top/bottom spine.
+        ax.set_ylim(-0.04, 1.08)
 
         if val_loss:
             best_ep  = val_loss.index(min(val_loss)) + 1
-            best_val = min(val_loss)
+            best_val = min(val_loss)          # original value for annotation
             ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
 
             # Best-epoch annotation.
-            # Col 0: DRIVE/STARE label occupies upper-left → place box at
-            #        lower-right to avoid overlap.
+            # Col 0: DRIVE/STARE label at upper-left → place box at center-right.
             # Col 1+: no conflicting label → place box at upper-right.
             if col_idx == 0:
                 ann_y, ann_va = 0.50, "center"
@@ -242,7 +239,7 @@ class CombinedHistoryReporter:
 
             ax.text(
                 0.97, ann_y,
-                f"Best: ep.{best_ep}\n({best_val:.5f})",
+                f"Best: ep.{best_ep}\n(val={best_val:.5f})",
                 transform=ax.transAxes,
                 fontsize=5, ha="right", va=ann_va,
                 color="#222222",
