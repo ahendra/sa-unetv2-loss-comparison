@@ -72,8 +72,8 @@ class CombinedHistoryReporter:
                 "font.size":          8,
                 "axes.titlesize":     8,
                 "axes.labelsize":     8,
-                "xtick.labelsize":    7,
-                "ytick.labelsize":    7,
+                "xtick.labelsize":    6.5,
+                "ytick.labelsize":    6.5,
                 "legend.fontsize":    7,
                 "lines.linewidth":    1.2,
                 "axes.linewidth":     0.6,
@@ -97,8 +97,8 @@ class CombinedHistoryReporter:
                 n_rows + 1, n_cols,
                 figure=fig,
                 height_ratios=[1.0] * n_rows + [0.16],
-                hspace=0.60,
-                wspace=0.46,
+                hspace=0.62,
+                wspace=0.55,
                 left=0.095, right=0.997,
                 top=0.91,   bottom=0.04,
             )
@@ -123,20 +123,13 @@ class CombinedHistoryReporter:
                     ax.set_xlim(_X_LIM)
                     ax.set_xticks(_X_TICKS)
 
-                    # More Y-ticks so fluctuations are visible at native scale
-                    ax.yaxis.set_major_locator(ticker.MaxNLocator(6, prune="both"))
+                    # 4 Y-ticks per subplot — enough detail without label crowding
+                    ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune="both"))
 
-                    # Adaptive decimal places: more precision for small loss values
+                    # Max 3 decimal places; use 2 only when the range is large (≥ 0.5)
                     y_lo, y_hi = ax.get_ylim()
                     y_range = y_hi - y_lo if y_hi != y_lo else 1e-6
-                    if y_range < 0.005:
-                        y_fmt = "%.5f"
-                    elif y_range < 0.05:
-                        y_fmt = "%.4f"
-                    elif y_range < 0.5:
-                        y_fmt = "%.3f"
-                    else:
-                        y_fmt = "%.2f"
+                    y_fmt = "%.2f" if y_range >= 0.5 else "%.3f"
                     ax.yaxis.set_major_formatter(ticker.FormatStrFormatter(y_fmt))
 
                     ax.tick_params(axis="both", length=2.5, pad=2)
@@ -226,13 +219,18 @@ class CombinedHistoryReporter:
         ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.0, ls="-")
         ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.0, ls="-")
 
-        # Tight y-range: 3 % padding so epoch-to-epoch fluctuations fill more
-        # of the vertical space and are clearly readable on the published figure.
-        all_vals = [v for v in train_loss + val_loss if v == v]
-        if all_vals:
-            vmin, vmax = min(all_vals), max(all_vals)
+        # Y-range calibrated to the settled/convergence phase (last 60% of epochs)
+        # so epoch-to-epoch fluctuations occupy most of the vertical space.
+        # The steep initial drop (first 40%) may render above the top limit —
+        # matplotlib clips it cleanly without distorting the convergence region.
+        n = len(train_loss)
+        tail_start = max(1, int(n * 0.40))
+        tail_vals = [v for v in (train_loss[tail_start:] + val_loss[tail_start:]) if v == v]
+        ref_vals  = tail_vals if tail_vals else [v for v in train_loss + val_loss if v == v]
+        if ref_vals:
+            vmin, vmax = min(ref_vals), max(ref_vals)
             span = max(vmax - vmin, 1e-6)
-            ax.set_ylim(max(0.0, vmin - span * 0.03), vmax + span * 0.03)
+            ax.set_ylim(max(0.0, vmin - span * 0.05), vmax + span * 0.08)
 
         if val_loss:
             best_ep  = val_loss.index(min(val_loss)) + 1
