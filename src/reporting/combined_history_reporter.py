@@ -97,7 +97,7 @@ class CombinedHistoryReporter:
                 n_rows + 1, n_cols,
                 figure=fig,
                 height_ratios=[1.0] * n_rows + [0.16],
-                hspace=0.62,
+                hspace=0.42,
                 wspace=0.55,
                 left=0.095, right=0.997,
                 top=0.91,   bottom=0.04,
@@ -138,13 +138,8 @@ class CombinedHistoryReporter:
                         sp.set_linewidth(0.6)
                         sp.set_color("#888888")
 
-                    # X-tick labels: bottom row only (DRIVE row is redundant — same range)
-                    if row_idx < n_rows - 1:
-                        ax.tick_params(labelbottom=False)
-
-                    # Axis labels: x on bottom row, y on leftmost column
-                    if row_idx == n_rows - 1:
-                        ax.set_xlabel("Epoch", fontsize=7.5, labelpad=3)
+                    # Axis labels: x on both rows, y on leftmost column only
+                    ax.set_xlabel("Epoch", fontsize=7.5, labelpad=3)
                     if col_idx == 0:
                         ax.set_ylabel("Loss", fontsize=7.5, labelpad=3)
 
@@ -224,7 +219,7 @@ class CombinedHistoryReporter:
         # The steep initial drop (first 40%) may render above the top limit —
         # matplotlib clips it cleanly without distorting the convergence region.
         n = len(train_loss)
-        tail_start = max(1, int(n * 0.40))
+        tail_start = max(1, int(n * 0.25))
         tail_vals = [v for v in (train_loss[tail_start:] + val_loss[tail_start:]) if v == v]
         ref_vals  = tail_vals if tail_vals else [v for v in train_loss + val_loss if v == v]
         if ref_vals:
