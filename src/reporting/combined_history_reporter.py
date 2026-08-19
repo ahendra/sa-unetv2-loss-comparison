@@ -18,7 +18,7 @@ _DATASETS = [("drive", "DRIVE"), ("stare", "STARE")]
 
 # A4 two-column full-width: text area = (210 − 13 − 13) mm = 184 mm
 _FIG_W_IN = 184 / 25.4   # 7.244 in
-_FIG_H_IN = 3.80         # 2 subplot rows + legend row
+_FIG_H_IN = 5.20         # 2 subplot rows + legend row (taller for fluctuation visibility)
 
 # Fixed x-axis — same across all subplots for fair epoch-count comparison.
 # Y-axis is auto-scaled per subplot: different loss functions operate on
@@ -37,7 +37,7 @@ class CombinedHistoryReporter:
 
     Layout : 2 rows (DRIVE, STARE) × 6 columns (one per loss function),
              plus a shared legend row at the bottom.
-    Output : 300 dpi PNG sized for full-width two-column A4 paper (184 mm wide).
+    Output : 600 dpi PNG sized for full-width two-column A4 paper (184 mm wide).
     Font   : Helvetica / Arial / sans-serif, 8 pt.
     Scales : Fixed x-axis [0–150] for fair epoch comparison; y-axis auto-scaled
              per subplot (loss value ranges differ fundamentally across functions).
@@ -96,11 +96,11 @@ class CombinedHistoryReporter:
             gs = gridspec.GridSpec(
                 n_rows + 1, n_cols,
                 figure=fig,
-                height_ratios=[1.0] * n_rows + [0.20],
-                hspace=0.38,
-                wspace=0.42,
-                left=0.062, right=0.997,
-                top=0.91,   bottom=0.02,
+                height_ratios=[1.0] * n_rows + [0.16],
+                hspace=0.60,
+                wspace=0.46,
+                left=0.095, right=0.997,
+                top=0.91,   bottom=0.04,
             )
 
             axes = [
@@ -120,18 +120,40 @@ class CombinedHistoryReporter:
                         self._draw_curves(ax, history)
 
                     # ── Axis scales ───────────────────────────────────────────
-                    # X: fixed for all subplots (fair epoch comparison).
-                    # Y: auto-scaled per subplot inside _draw_curves(); here
-                    #    we only configure ticks and format after drawing.
                     ax.set_xlim(_X_LIM)
                     ax.set_xticks(_X_TICKS)
-                    ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune="both"))
-                    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter("%.3f"))
+
+                    # More Y-ticks so fluctuations are visible at native scale
+                    ax.yaxis.set_major_locator(ticker.MaxNLocator(6, prune="both"))
+
+                    # Adaptive decimal places: more precision for small loss values
+                    y_lo, y_hi = ax.get_ylim()
+                    y_range = y_hi - y_lo if y_hi != y_lo else 1e-6
+                    if y_range < 0.005:
+                        y_fmt = "%.5f"
+                    elif y_range < 0.05:
+                        y_fmt = "%.4f"
+                    elif y_range < 0.5:
+                        y_fmt = "%.3f"
+                    else:
+                        y_fmt = "%.2f"
+                    ax.yaxis.set_major_formatter(ticker.FormatStrFormatter(y_fmt))
+
                     ax.tick_params(axis="both", length=2.5, pad=2)
-                    ax.grid(True, alpha=0.2, lw=0.5, color="#888888")
+                    ax.grid(True, alpha=0.25, lw=0.5, color="#888888")
                     for sp in ax.spines.values():
                         sp.set_linewidth(0.6)
                         sp.set_color("#888888")
+
+                    # X-tick labels: bottom row only (DRIVE row is redundant — same range)
+                    if row_idx < n_rows - 1:
+                        ax.tick_params(labelbottom=False)
+
+                    # Axis labels: x on bottom row, y on leftmost column
+                    if row_idx == n_rows - 1:
+                        ax.set_xlabel("Epoch", fontsize=7.5, labelpad=3)
+                    if col_idx == 0:
+                        ax.set_ylabel("Loss", fontsize=7.5, labelpad=3)
 
                     # Column header: top row only
                     if row_idx == 0:
@@ -139,8 +161,6 @@ class CombinedHistoryReporter:
                             _SHORT_LABELS.get(loss_key, loss_key),
                             pad=3, fontsize=8, fontweight="bold",
                         )
-
-
 
                     # Dataset label inside subplot, upper-left box (col 0 only)
                     if col_idx == 0:
@@ -177,7 +197,7 @@ class CombinedHistoryReporter:
 
             self._out_dir.mkdir(parents=True, exist_ok=True)
             path = self._out_dir / "combined_training_history.png"
-            fig.savefig(str(path), dpi=300, bbox_inches="tight",
+            fig.savefig(str(path), dpi=600, bbox_inches="tight",
                         facecolor="white", edgecolor="none")
             plt.close(fig)
             print(f"  Combined training history: {path}")
@@ -203,15 +223,16 @@ class CombinedHistoryReporter:
         val_loss   = history.get("val_loss", [])
         epochs     = list(range(1, len(train_loss) + 1))
 
-        ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.2, ls="-")
-        ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.2, ls="-")
+        ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.0, ls="-")
+        ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.0, ls="-")
 
-        # Auto y-range with 6 % padding above/below the data extent
+        # Tight y-range: 3 % padding so epoch-to-epoch fluctuations fill more
+        # of the vertical space and are clearly readable on the published figure.
         all_vals = [v for v in train_loss + val_loss if v == v]
         if all_vals:
             vmin, vmax = min(all_vals), max(all_vals)
             span = max(vmax - vmin, 1e-6)
-            ax.set_ylim(max(0.0, vmin - span * 0.06), vmax + span * 0.06)
+            ax.set_ylim(max(0.0, vmin - span * 0.03), vmax + span * 0.03)
 
         if val_loss:
             best_ep  = val_loss.index(min(val_loss)) + 1
