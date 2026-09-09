@@ -57,6 +57,18 @@ class StareDataLoader:
         )
         return x_val, y_val
 
+    def load_train_skeleton(self) -> np.ndarray:
+        """Load training-split skeletons aligned with load_train() ordering."""
+        skel_all = self._load_all_skeletons()
+        skel_train, _ = train_test_split(skel_all, test_size=0.1, shuffle=True, random_state=42)
+        return skel_train
+
+    def load_validate_skeleton(self) -> np.ndarray:
+        """Load validation-split skeletons aligned with load_validate() ordering."""
+        skel_all = self._load_all_skeletons()
+        _, skel_val = train_test_split(skel_all, test_size=0.1, shuffle=True, random_state=42)
+        return skel_val
+
     def load_test(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load test images (padded to input_size) and labels."""
         self._original_test_shapes = []
@@ -112,6 +124,37 @@ class StareDataLoader:
         ]
 
     # ── Private helpers ──────────────────────────────────────────────────────
+
+    def _load_all_skeletons(self) -> np.ndarray:
+        """Load all skeleton PNGs from both pool dirs, in the same order as _load_all_augmented."""
+        skel_list = []
+        for img_dir, label_dir, skel_dir in (
+            (self.cfg.aug_train_images, self.cfg.aug_train_labels,
+             self.cfg.aug_train_skeletons),
+            (self.cfg.aug_val_images,   self.cfg.aug_val_labels,
+             self.cfg.aug_val_skeletons),
+        ):
+            if not os.path.isdir(img_dir):
+                continue
+            files = sorted(f for f in os.listdir(img_dir)
+                           if f.lower().endswith('.png') and not f.startswith('.'))
+            for fname in files:
+                base = os.path.splitext(fname)[0]
+                label_name = f"{base}.ah.png"
+                label_path = os.path.join(label_dir, label_name)
+                if not os.path.exists(label_path):
+                    continue
+                skel_path = os.path.join(skel_dir, label_name)
+                if os.path.exists(skel_path):
+                    skel = np.array(
+                        Image.open(skel_path).convert('L'), dtype=np.float32
+                    ) / 255.0
+                else:
+                    lbl = np.array(Image.open(label_path).convert('L'))
+                    skel = np.zeros_like(lbl, dtype=np.float32)
+                skel_pad = _pad_symmetric(skel, self.target_h, self.target_w)
+                skel_list.append(np.expand_dims(skel_pad, axis=-1))
+        return np.array(skel_list, dtype=np.float32)
 
     def _load_all_augmented(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load all augmented images from both train and validate pool dirs."""
