@@ -133,6 +133,23 @@ SEARCH_SPACES = {
     "bce_ssim": {
         "lambda_bce": ("float", 0.3, 0.7),
     },
+
+    # ── Skeleton Recall Loss ─────────────────────────────────────────────────
+    # weight_srec ∈ [0.1, 10.0] (log scale):
+    #   Kirchhoff et al. (2024) menggunakan weight_srec=1 sebagai default.
+    #   Log scale dipilih karena pengaruh weight bersifat multiplicative;
+    #   eksplorasi simetris di sekitar 1 (i.e. 0.1–10) mencakup semua
+    #   konfigurasi yang relevan (under-weight hingga over-weight).
+    #
+    # smooth ∈ [1e-7, 1e-3] (log scale):
+    #   Smooth (ε) pada SkelRecall hanya menstabilkan pembagian ketika skel_GT
+    #   sangat jarang; Bertels et al. [4] menganalisis range [1e-7, 1.0].
+    #   Range atas dibatasi 1e-3 karena nilai besar dapat mendistorsi
+    #   gradient pada struktur tipis (vessel skeleton).
+    "skel_recall": {
+        "weight_srec": ("float_log", 0.1, 10.0),
+        "smooth":      ("float_log", 1e-7, 1e-3),
+    },
 }
 
 
@@ -203,6 +220,17 @@ def _build_loss(loss_key: str, params: dict):
         def fn(y_true, y_pred):
             return (params["lambda_bce"] * _bce(y_true, y_pred)
                     + params["lambda_ssim"] * _ssim(y_true, y_pred))
+        return fn
+
+    if loss_key == "skel_recall":
+        from src.losses.loss_functions import _skeleton_recall, _dice, _bce
+        def fn(y_true_combined, y_pred):
+            y_true = y_true_combined[..., :1]
+            y_skel = y_true_combined[..., 1:2]
+            ce   = _bce(y_true, y_pred)
+            d    = _dice(y_true, y_pred, smooth=1e-6)
+            srec = _skeleton_recall(y_skel, y_pred, smooth=params["smooth"])
+            return ce + d + params["weight_srec"] * srec
         return fn
 
     raise ValueError(f"Unknown loss_key: {loss_key}")
@@ -277,7 +305,7 @@ class LossTuner:
                     return
                 y_pred     = self.model.predict(self._x_val, verbose=0)
                 y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
-                y_true_bin = (self._y_val.ravel() > 0.5).astype(np.uint8)
+                y_true_bin = (self._y_val[..., :1].ravel() > 0.5).astype(np.uint8)
                 val_f1     = float(f1_score(y_true_bin, y_pred_bin, zero_division=0))
                 self.last_val_f1 = val_f1
                 self._trial.report(val_f1, epoch)
@@ -384,7 +412,7 @@ class LossTuner:
 
         y_pred     = model.predict(self.x_val, batch_size=self.cfg.batch_size, verbose=0)
         y_pred_bin = (y_pred.ravel() > 0.5).astype(np.uint8)
-        y_true_bin = (self.y_val.ravel() > 0.5).astype(np.uint8)
+        y_true_bin = (self.y_val[..., :1].ravel() > 0.5).astype(np.uint8)
         f1         = float(f1_score(y_true_bin, y_pred_bin, zero_division=0))
 
         # Free GPU memory between trials

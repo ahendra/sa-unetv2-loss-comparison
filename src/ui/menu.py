@@ -5,6 +5,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Union
 
+import numpy as np
+
 from config import DriveConfig, StareConfig, LOSS_FUNCTIONS, RESULTS_DIR
 from src.data import RetinalAugmentationRunner, DriveDataLoader, StareDataLoader
 from src.preprocessing import build_pipeline
@@ -197,6 +199,50 @@ def _run_augmentation_stare() -> None:
 
 # ── Training ──────────────────────────────────────────────────────────────────
 
+def _ensure_skel_dir(cfg) -> bool:
+    """Pre-compute tubed skeleton maps for all augmented labels (idempotent).
+
+    Only processes labels for which a skeleton PNG does not yet exist.
+    Returns True on success, False if label directories are missing.
+    """
+    from src.losses.skeleton_utils import build_skeleton_dir
+    pairs = [
+        (cfg.aug_train_labels, cfg.aug_train_skeletons),
+        (cfg.aug_val_labels,   cfg.aug_val_skeletons),
+    ]
+    for label_dir, skel_dir in pairs:
+        lbl_path  = Path(label_dir)
+        skel_path = Path(skel_dir)
+        if not lbl_path.is_dir():
+            print(f"\n  [ERROR] Label dir tidak ditemukan: {label_dir}")
+            return False
+        n_labels = sum(1 for f in lbl_path.iterdir()
+                       if f.suffix.lower() == '.png' and not f.name.startswith('.'))
+        n_skels  = (sum(1 for f in skel_path.iterdir()
+                        if f.suffix.lower() == '.png' and not f.name.startswith('.'))
+                    if skel_path.is_dir() else 0)
+        if n_skels < n_labels:
+            missing = n_labels - n_skels
+            print(f"\n  Menghitung {missing} skeleton baru di: {skel_dir}")
+            count = build_skeleton_dir(label_dir, skel_dir)
+            print(f"  {count} skeleton tersimpan.")
+    return True
+
+
+def _stack_skeleton(cfg, y_train: np.ndarray, y_val: np.ndarray):
+    """Return (y_train_stacked, y_val_stacked) with skeleton appended as last channel."""
+    if isinstance(cfg, DriveConfig):
+        loader = DriveDataLoader(cfg)
+    else:
+        loader = StareDataLoader(cfg)
+    print("  Memuat skeleton train...")
+    skel_train = loader.load_train_skeleton()
+    print("  Memuat skeleton validate...")
+    skel_val   = loader.load_validate_skeleton()
+    return (np.concatenate([y_train, skel_train], axis=-1),
+            np.concatenate([y_val,   skel_val],   axis=-1))
+
+
 def _ensure_aug_dir(cfg) -> bool:
     """Cek apakah aug dir untuk mode aktif sudah ada; tawarkan generate jika belum.
 
@@ -269,6 +315,12 @@ def _train_single(trainer: ModelTrainer, cfg, loss_key: str, loss_label: str) ->
     if x_train is None:
         return
 
+    if loss_key == "skel_recall":
+        if not _ensure_skel_dir(cfg):
+            input("  Tekan Enter untuk kembali...")
+            return
+        y_train, y_val = _stack_skeleton(cfg, y_train, y_val)
+
     if trainer.weights_exist(loss_key):
         ans = input(f"\n  Bobot untuk '{loss_key}' sudah ada. Latih ulang? (y/n): ").strip().lower()
         if ans != 'y':
@@ -286,6 +338,11 @@ def _train_all(trainer: ModelTrainer, cfg) -> None:
     if x_train is None:
         return
 
+    # Pre-compute skeletons once if skel_recall is in the list
+    skel_ready = False
+    y_train_skel_stacked: Optional[np.ndarray] = None
+    y_val_skel_stacked:   Optional[np.ndarray] = None
+
     for loss_key, loss_label in LOSS_FUNCTIONS.items():
         print(f"\n{'=' * 60}")
         print(f"  [{list(LOSS_FUNCTIONS.keys()).index(loss_key)+1}/{len(LOSS_FUNCTIONS)}] {loss_label}")
@@ -297,8 +354,18 @@ def _train_all(trainer: ModelTrainer, cfg) -> None:
                 print("  Dilewati.")
                 continue
 
+        _y_train, _y_val = y_train, y_val
+        if loss_key == "skel_recall":
+            if not skel_ready:
+                if not _ensure_skel_dir(cfg):
+                    print("  [ERROR] Skeleton generation gagal. Dilewati.")
+                    continue
+                y_train_skel_stacked, y_val_skel_stacked = _stack_skeleton(cfg, y_train, y_val)
+                skel_ready = True
+            _y_train, _y_val = y_train_skel_stacked, y_val_skel_stacked
+
         loss_fn = get_loss_function(loss_key)
-        trainer.train(loss_key, loss_fn, x_train, y_train, x_val, y_val)
+        trainer.train(loss_key, loss_fn, x_train, _y_train, x_val, _y_val)
 
     input("\n  Semua training selesai. Tekan Enter untuk kembali...")
 
@@ -484,6 +551,12 @@ def _run_tuning_single(cfg, loss_key: str, n_trials: int, n_epochs: int,
     x_train, y_train, x_val, y_val = _load_training_data(cfg)
     if x_train is None:
         return
+
+    if loss_key == "skel_recall":
+        if not _ensure_skel_dir(cfg):
+            input("  Tekan Enter untuk kembali...")
+            return
+        y_train, y_val = _stack_skeleton(cfg, y_train, y_val)
 
     tuner = LossTuner(cfg, loss_key, x_train, y_train, x_val, y_val,
                       n_epochs=n_epochs)

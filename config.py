@@ -98,10 +98,12 @@ class DriveConfig:
         # Mode-specific augmentation directories — preprocessing baked in at aug-time
         _aug = _DATASETS_DIR / "DRIVE" / f"aug_{self.preprocessing_mode}"
         self.aug_dir          = str(_aug)
-        self.aug_train_images = str(_aug / "train"    / "images")
-        self.aug_train_labels = str(_aug / "train"    / "labels")
-        self.aug_val_images   = str(_aug / "validate" / "images")
-        self.aug_val_labels   = str(_aug / "validate" / "labels")
+        self.aug_train_images     = str(_aug / "train"    / "images")
+        self.aug_train_labels     = str(_aug / "train"    / "labels")
+        self.aug_val_images       = str(_aug / "validate" / "images")
+        self.aug_val_labels       = str(_aug / "validate" / "labels")
+        self.aug_train_skeletons  = str(_aug / "train"    / "skeletons")
+        self.aug_val_skeletons    = str(_aug / "validate" / "skeletons")
 
 
 @dataclass
@@ -155,21 +157,24 @@ class StareConfig:
         # Mode-specific augmentation directories — preprocessing baked in at aug-time
         _aug = _DATASETS_DIR / "STARE" / f"aug_{self.preprocessing_mode}"
         self.aug_dir          = str(_aug)
-        self.aug_train_images = str(_aug / "train"    / "images")
-        self.aug_train_labels = str(_aug / "train"    / "labels")
-        self.aug_val_images   = str(_aug / "validate" / "images")
-        self.aug_val_labels   = str(_aug / "validate" / "labels")
+        self.aug_train_images     = str(_aug / "train"    / "images")
+        self.aug_train_labels     = str(_aug / "train"    / "labels")
+        self.aug_val_images       = str(_aug / "validate" / "images")
+        self.aug_val_labels       = str(_aug / "validate" / "labels")
+        self.aug_train_skeletons  = str(_aug / "train"    / "skeletons")
+        self.aug_val_skeletons    = str(_aug / "validate" / "skeletons")
 
 
 # ── Loss function registry ────────────────────────────────────────────────────
 
 LOSS_FUNCTIONS = {
-    "bce_mcc":   "BCE + MCC (Baseline)",
-    "dice":      "Dice Loss",
-    "focal":     "Focal Loss",
-    "cldice":    "clDice Loss",
-    "dice_ssim": "Dice + SSIM",
-    "bce_ssim":  "BCE + SSIM",
+    "bce_mcc":    "BCE + MCC (Baseline)",
+    "dice":       "Dice Loss",
+    "focal":      "Focal Loss",
+    "cldice":     "clDice Loss",
+    "dice_ssim":  "Dice + SSIM",
+    "bce_ssim":   "BCE + SSIM",
+    "skel_recall": "Skeleton Recall Loss",
 }
 
 # ── Loss function hyperparameters ─────────────────────────────────────────────
@@ -240,6 +245,10 @@ LOSS_PARAMS = {
     "bce_ssim": {
         "lambda_bce": 0.5472968469657383,
         "lambda_ssim": 0.45270315
+    },
+    "skel_recall": {
+        "weight_srec": 1.0,
+        "smooth": 1e-5,
     },
 }
 

@@ -49,6 +49,19 @@ def _ssim(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     return 1.0 - tf.reduce_mean(tf.image.ssim(y_true, y_pred, max_val=1.0))
 
 
+def _skeleton_recall(y_skel: tf.Tensor, y_pred: tf.Tensor, smooth: float) -> tf.Tensor:
+    """Soft recall of prediction over the precomputed tubed skeleton GT.
+
+    Formula: 1 - (Σ(pred × skel) + ε) / (Σ(skel) + ε)
+
+    Kirchhoff et al., "Skeleton Recall Loss for Connectivity Conserving and
+    Resource Efficient Segmentation of Thin Tubular Structures," ECCV 2024.
+    """
+    inter    = tf.reduce_sum(y_pred * y_skel)
+    sum_skel = tf.reduce_sum(y_skel)
+    return 1.0 - (inter + smooth) / (sum_skel + smooth)
+
+
 def _focal(y_true: tf.Tensor, y_pred: tf.Tensor,
            alpha: float, gamma: float, smooth: float) -> tf.Tensor:
     y_pred = tf.clip_by_value(y_pred, smooth, 1.0 - smooth)
@@ -123,15 +136,35 @@ def bce_ssim_loss(y_true: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
     return p["lambda_bce"] * _bce(y_true, y_pred) + p["lambda_ssim"] * _ssim(y_true, y_pred)
 
 
+def skel_recall_loss(y_true_combined: tf.Tensor, y_pred: tf.Tensor) -> tf.Tensor:
+    """BCE + Dice + w × Skeleton Recall Loss — DC_SkelREC_and_CE_loss.
+
+    y_true_combined has 2 channels along the last axis:
+      [..., :1]  — regular binary GT mask
+      [..., 1:2] — precomputed tubed skeleton GT (Kirchhoff et al., ECCV 2024)
+
+    Matches the original DC_SkelREC_and_CE_loss formulation:
+      L = L_CE + L_Dice + weight_srec × L_SkelRecall
+    """
+    p      = LOSS_PARAMS["skel_recall"]
+    y_true = y_true_combined[..., :1]
+    y_skel = y_true_combined[..., 1:2]
+    ce   = _bce(y_true, y_pred)
+    d    = _dice(y_true, y_pred, smooth=1e-6)
+    srec = _skeleton_recall(y_skel, y_pred, smooth=p["smooth"])
+    return ce + d + p["weight_srec"] * srec
+
+
 # ── Loss Registry ────────────────────────────────────────────────────────────
 
 LOSS_REGISTRY: dict[str, Callable] = {
-    "bce_mcc":   bce_mcc_loss,
-    "dice":      pure_dice_loss,
-    "focal":     pure_focal_loss,
-    "cldice":    cldice_loss,
-    "dice_ssim": dice_ssim_loss,
-    "bce_ssim":  bce_ssim_loss,
+    "bce_mcc":    bce_mcc_loss,
+    "dice":       pure_dice_loss,
+    "focal":      pure_focal_loss,
+    "cldice":     cldice_loss,
+    "dice_ssim":  dice_ssim_loss,
+    "bce_ssim":   bce_ssim_loss,
+    "skel_recall": skel_recall_loss,
 }
 
 

@@ -60,6 +60,20 @@ class DriveDataLoader:
         """Load augmented validation split (aug/validate)."""
         return self._load_split(self.cfg.aug_val_images, self.cfg.aug_val_labels)
 
+    def load_train_skeleton(self) -> np.ndarray:
+        """Load pre-computed tubed skeletons for the training split."""
+        return self._load_skeletons(
+            self.cfg.aug_train_images, self.cfg.aug_train_labels,
+            self.cfg.aug_train_skeletons,
+        )
+
+    def load_validate_skeleton(self) -> np.ndarray:
+        """Load pre-computed tubed skeletons for the validation split."""
+        return self._load_skeletons(
+            self.cfg.aug_val_images, self.cfg.aug_val_labels,
+            self.cfg.aug_val_skeletons,
+        )
+
     def load_test(self) -> Tuple[np.ndarray, np.ndarray, Optional[np.ndarray]]:
         """
         Load test images (padded), labels and optional FOV masks at original size.
@@ -127,6 +141,28 @@ class DriveDataLoader:
         return restored
 
     # ── Private helpers ──────────────────────────────────────────────────────
+
+    def _load_skeletons(self, img_dir: str, label_dir: str, skel_dir: str) -> np.ndarray:
+        """Load skeleton PNGs aligned with the same image ordering as _load_split.
+
+        Skeleton file names mirror label names (same stem, same .png extension).
+        Falls back to a zero array when a skeleton file is missing.
+        """
+        files = sorted(f for f in os.listdir(img_dir) if not f.startswith('.'))
+        skel_list = []
+        for fname in files:
+            stem = fname.split('_')[0]
+            label_path = _find_label(label_dir, f"{stem}_manual1")
+            if label_path is None:
+                continue
+            skel_path = os.path.join(skel_dir, f"{stem}_manual1.png")
+            if os.path.exists(skel_path):
+                skel = np.array(Image.open(skel_path).convert('L'), dtype=np.float32) / 255.0
+            else:
+                skel = np.zeros((self.target_h, self.target_w), dtype=np.float32)
+            skel_pad = _pad_to(skel, self.target_h, self.target_w)
+            skel_list.append(np.expand_dims(skel_pad, axis=-1))
+        return np.array(skel_list, dtype=np.float32)
 
     def _load_split(self, img_dir: str, label_dir: str) -> Tuple[np.ndarray, np.ndarray]:
         """
