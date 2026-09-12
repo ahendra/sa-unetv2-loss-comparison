@@ -100,8 +100,8 @@ class DriveConfig:
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
     preprocessing_mode: str  = "clahe"
-    clahe_clip_limit: float  = 1.5   # Liskowski & Krawiec (2016); Wang et al. (2020)
-    clahe_tile_grid: int     = 4     # OpenCV default; standard in retinal segmentation
+    clahe_clip_limit: float  = 2.0   # Liskowski & Krawiec (2016); Wang et al. (2020)
+    clahe_tile_grid: int     = 8     # OpenCV default; standard in retinal segmentation
 
     def __post_init__(self):
         h, w, _ = self.input_size
@@ -159,8 +159,8 @@ class StareConfig:
     # "green"       → green channel extraction only (input channels: 1)
     # "green_clahe" → green channel + CLAHE enhancement (input channels: 1)
     preprocessing_mode: str  = "clahe"
-    clahe_clip_limit: float  = 1.5   # Liskowski & Krawiec (2016); Wang et al. (2020)
-    clahe_tile_grid: int     = 4     # OpenCV default; standard in retinal segmentation
+    clahe_clip_limit: float  = 2.0   # Liskowski & Krawiec (2016); Wang et al. (2020)
+    clahe_tile_grid: int     = 8     # OpenCV default; standard in retinal segmentation
 
     def __post_init__(self):
         h, w, _ = self.input_size
