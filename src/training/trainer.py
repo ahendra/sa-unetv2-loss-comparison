@@ -16,12 +16,16 @@ from keras.callbacks import (
 )
 from keras.optimizers import Adam
 
-from config import DriveConfig, StareConfig, RESULTS_DIR, WEIGHTS_DIR, RANDOM_SEED
+from config import DriveConfig, StareConfig, RESULTS_DIR, WEIGHTS_DIR, TRAIN_SEED
 from src.models import build_sa_unetv2
 
 
-def set_global_seed(seed: Optional[int] = RANDOM_SEED) -> None:
+def set_global_seed(seed: Optional[int] = TRAIN_SEED) -> None:
     """Fix random seed across all RNG sources used during training.
+
+    Uses TRAIN_SEED (from EXPERIMENT_SEED env var, or RANDOM_SEED as fallback)
+    so that multiple independent runs can be launched by varying EXPERIMENT_SEED
+    without touching the fixed augmentation/Optuna seed (RANDOM_SEED).
 
     Must be called before model construction. Covers:
       - Python built-in random
@@ -89,9 +93,12 @@ class ModelTrainer:
         y_train: np.ndarray,
         x_val: np.ndarray,
         y_val: np.ndarray,
+        seed: Optional[int] = None,
+        seed_tag: str = "",
     ) -> keras.Model:
-        set_global_seed()
-        weight_path = self._weight_path(loss_name)
+        _seed = seed if seed is not None else TRAIN_SEED
+        set_global_seed(_seed)
+        weight_path = self._weight_path(loss_name, seed_tag)
         weight_path.parent.mkdir(parents=True, exist_ok=True)
 
         model = build_sa_unetv2(
@@ -106,7 +113,8 @@ class ModelTrainer:
             metrics=['accuracy'],
         )
 
-        seed_info = f"seed={RANDOM_SEED}" if RANDOM_SEED is not None else "seed=None (non-reproducible)"
+        tag_str  = f" [{seed_tag}]" if seed_tag else ""
+        seed_info = f"train_seed={_seed}{tag_str}" if _seed is not None else "train_seed=None"
         print(f"\n  Model: SA-UNetV2 | Loss: {loss_name} | Dataset: {self.cfg.name} | {seed_info}")
         print(f"  Train samples: {len(x_train)}  Val samples: {len(x_val)}")
         print(f"  Weights will be saved to: {weight_path}")
@@ -151,12 +159,12 @@ class ModelTrainer:
         )
         elapsed = round(time.perf_counter() - t0, 2)
 
-        self._save_history(loss_name, history.history, elapsed)
+        self._save_history(loss_name, history.history, elapsed, seed_tag)
         return model
 
-    def load_weights(self, loss_name: str) -> keras.Model:
+    def load_weights(self, loss_name: str, seed_tag: str = "") -> keras.Model:
         """Build model and load saved best weights for a given loss."""
-        weight_path = self._weight_path(loss_name)
+        weight_path = self._weight_path(loss_name, seed_tag)
         if not weight_path.exists():
             raise FileNotFoundError(
                 f"No saved weights found for '{loss_name}' at {weight_path}"
@@ -170,31 +178,33 @@ class ModelTrainer:
         model.load_weights(str(weight_path))
         return model
 
-    def weights_exist(self, loss_name: str) -> bool:
-        return self._weight_path(loss_name).exists()
+    def weights_exist(self, loss_name: str, seed_tag: str = "") -> bool:
+        return self._weight_path(loss_name, seed_tag).exists()
 
-    def history_exists(self, loss_name: str) -> bool:
-        return self._history_path(loss_name).exists()
+    def history_exists(self, loss_name: str, seed_tag: str = "") -> bool:
+        return self._history_path(loss_name, seed_tag).exists()
 
-    def load_history(self, loss_name: str) -> Optional[Dict]:
-        path = self._history_path(loss_name)
+    def load_history(self, loss_name: str, seed_tag: str = "") -> Optional[Dict]:
+        path = self._history_path(loss_name, seed_tag)
         if not path.exists():
             return None
         with open(path) as f:
             return json.load(f)
 
     def _save_history(self, loss_name: str, history_dict: dict,
-                      elapsed_sec: float = 0.0) -> None:
-        path = self._history_path(loss_name)
+                      elapsed_sec: float = 0.0, seed_tag: str = "") -> None:
+        path = self._history_path(loss_name, seed_tag)
         path.parent.mkdir(parents=True, exist_ok=True)
         serializable = {k: [float(v) for v in vals] for k, vals in history_dict.items()}
         serializable["elapsed_sec"] = elapsed_sec
         with open(path, "w") as f:
             json.dump(serializable, f, indent=2)
 
-    def _weight_path(self, loss_name: str) -> Path:
+    def _weight_path(self, loss_name: str, seed_tag: str = "") -> Path:
         dataset_dir = self.cfg.name.lower()
-        return WEIGHTS_DIR / dataset_dir / f"{self.cfg.name.lower()}_{loss_name}.weights.h5"
+        tag = f"_{seed_tag}" if seed_tag else ""
+        return WEIGHTS_DIR / dataset_dir / f"{self.cfg.name.lower()}_{loss_name}{tag}.weights.h5"
 
-    def _history_path(self, loss_name: str) -> Path:
-        return RESULTS_DIR / self.cfg.name.lower() / "history" / f"{loss_name}_history.json"
+    def _history_path(self, loss_name: str, seed_tag: str = "") -> Path:
+        tag = f"_{seed_tag}" if seed_tag else ""
+        return RESULTS_DIR / self.cfg.name.lower() / "history" / f"{loss_name}{tag}_history.json"

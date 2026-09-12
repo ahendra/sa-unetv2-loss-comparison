@@ -14,7 +14,7 @@ import sys
 # Must come before config import below.
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from config import RANDOM_SEED as _CFG_SEED
+from config import TRAIN_SEED as _TRAIN_SEED
 
 # ── Determinism & reproducibility ─────────────────────────────────────────────
 # These MUST be set before TensorFlow / Keras is imported.
@@ -23,15 +23,11 @@ from config import RANDOM_SEED as _CFG_SEED
 #                         causes different floating-point rounding each run.
 # TF_CUDNN_DETERMINISTIC: forces cuDNN to pick deterministic convolution
 #                         algorithms instead of the fastest non-deterministic one.
-# PYTHONHASHSEED        : must be set before the interpreter starts to fully
-#                         suppress Python's random hash salting; setting it here
-#                         (at process entry, before any imports) is the earliest
-#                         reliable point short of a wrapper script.
-#
-# When RANDOM_SEED is None, deterministic mode is skipped entirely — TF would
-# raise RuntimeError if determinism is enabled without a seed being set.
-if _CFG_SEED is not None:
-    _SEED = str(_CFG_SEED)
+# PYTHONHASHSEED        : set to TRAIN_SEED so each experiment run gets a
+#                         consistent (but run-specific) hash salt.
+#                         Override via: EXPERIMENT_SEED=<n> python main.py
+if _TRAIN_SEED is not None:
+    _SEED = str(_TRAIN_SEED)
     os.environ.setdefault("TF_DETERMINISTIC_OPS",   "1")
     os.environ.setdefault("TF_CUDNN_DETERMINISTIC",  "1")
     os.environ.setdefault("PYTHONHASHSEED",           _SEED)

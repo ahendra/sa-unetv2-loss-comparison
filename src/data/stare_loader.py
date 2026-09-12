@@ -4,7 +4,6 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 from PIL import Image
-from sklearn.model_selection import train_test_split
 
 from config import StareConfig
 from src.preprocessing import IdentityStep, PreprocessingPipeline, build_pipeline
@@ -39,35 +38,30 @@ class StareDataLoader:
     # ── Public API ──────────────────────────────────────────────────────────
 
     def load_train(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load training split.
-        Matches original notebook: load all augmented images then split 90/10
-        with train_test_split(random_state=42).
+        """Load augmented training split (aug/train).
+
+        Split is performed at the original-image level during augmentation,
+        so this directory contains only data from training-set originals.
         """
-        x_all, y_all = self._load_all_augmented()
-        x_train, _, y_train, _ = train_test_split(
-            x_all, y_all, test_size=0.1, shuffle=True, random_state=42
-        )
-        return x_train, y_train
+        return self._load_split(self.cfg.aug_train_images, self.cfg.aug_train_labels)
 
     def load_validate(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load validation split (10% of augmented data, random_state=42)."""
-        x_all, y_all = self._load_all_augmented()
-        _, x_val, _, y_val = train_test_split(
-            x_all, y_all, test_size=0.1, shuffle=True, random_state=42
-        )
-        return x_val, y_val
+        """Load augmented validation split (aug/validate)."""
+        return self._load_split(self.cfg.aug_val_images, self.cfg.aug_val_labels)
 
     def load_train_skeleton(self) -> np.ndarray:
-        """Load training-split skeletons aligned with load_train() ordering."""
-        skel_all = self._load_all_skeletons()
-        skel_train, _ = train_test_split(skel_all, test_size=0.1, shuffle=True, random_state=42)
-        return skel_train
+        """Load pre-computed tubed skeletons for the training split."""
+        return self._load_skeleton_split(
+            self.cfg.aug_train_images, self.cfg.aug_train_labels,
+            self.cfg.aug_train_skeletons,
+        )
 
     def load_validate_skeleton(self) -> np.ndarray:
-        """Load validation-split skeletons aligned with load_validate() ordering."""
-        skel_all = self._load_all_skeletons()
-        _, skel_val = train_test_split(skel_all, test_size=0.1, shuffle=True, random_state=42)
-        return skel_val
+        """Load pre-computed tubed skeletons for the validation split."""
+        return self._load_skeleton_split(
+            self.cfg.aug_val_images, self.cfg.aug_val_labels,
+            self.cfg.aug_val_skeletons,
+        )
 
     def load_test(self) -> Tuple[np.ndarray, np.ndarray]:
         """Load test images (padded to input_size) and labels."""
@@ -125,68 +119,62 @@ class StareDataLoader:
 
     # ── Private helpers ──────────────────────────────────────────────────────
 
-    def _load_all_skeletons(self) -> np.ndarray:
-        """Load all skeleton PNGs from both pool dirs, in the same order as _load_all_augmented."""
-        skel_list = []
-        for img_dir, label_dir, skel_dir in (
-            (self.cfg.aug_train_images, self.cfg.aug_train_labels,
-             self.cfg.aug_train_skeletons),
-            (self.cfg.aug_val_images,   self.cfg.aug_val_labels,
-             self.cfg.aug_val_skeletons),
-        ):
-            if not os.path.isdir(img_dir):
-                continue
-            files = sorted(f for f in os.listdir(img_dir)
-                           if f.lower().endswith('.png') and not f.startswith('.'))
-            for fname in files:
-                base = os.path.splitext(fname)[0]
-                label_name = f"{base}.ah.png"
-                label_path = os.path.join(label_dir, label_name)
-                if not os.path.exists(label_path):
-                    continue
-                skel_path = os.path.join(skel_dir, label_name)
-                if os.path.exists(skel_path):
-                    skel = np.array(
-                        Image.open(skel_path).convert('L'), dtype=np.float32
-                    ) / 255.0
-                else:
-                    lbl = np.array(Image.open(label_path).convert('L'))
-                    skel = np.zeros_like(lbl, dtype=np.float32)
-                skel_pad = _pad_symmetric(skel, self.target_h, self.target_w)
-                skel_list.append(np.expand_dims(skel_pad, axis=-1))
-        return np.array(skel_list, dtype=np.float32)
+    def _load_split(self, img_dir: str, label_dir: str) -> Tuple[np.ndarray, np.ndarray]:
+        """Load all image/label pairs from a STARE split directory.
 
-    def _load_all_augmented(self) -> Tuple[np.ndarray, np.ndarray]:
-        """Load all augmented images from both train and validate pool dirs."""
+        Label name convention: {base}.ah.png where base = filename without extension.
+        Works for both augmented filenames (e.g. randomRotation0im0001.png) and
+        original filenames (e.g. im0001.png).
+        """
+        if not os.path.isdir(img_dir):
+            return np.zeros((0,), dtype=np.float32), np.zeros((0,), dtype=np.float32)
+        files = sorted(f for f in os.listdir(img_dir)
+                       if f.lower().endswith('.png') and not f.startswith('.'))
         x_list, y_list = [], []
-        for img_dir, label_dir in (
-            (self.cfg.aug_train_images, self.cfg.aug_train_labels),
-            (self.cfg.aug_val_images,   self.cfg.aug_val_labels),
-        ):
-            if not os.path.isdir(img_dir):
+        for fname in files:
+            base       = os.path.splitext(fname)[0]
+            label_name = f"{base}.ah.png"
+            label_path = os.path.join(label_dir, label_name)
+            if not os.path.exists(label_path):
                 continue
-            files = sorted(f for f in os.listdir(img_dir)
-                           if f.lower().endswith('.png') and not f.startswith('.'))
-            for fname in files:
-                base       = os.path.splitext(fname)[0]
-                label_name = f"{base}.ah.png"
-                label_path = os.path.join(label_dir, label_name)
-                if not os.path.exists(label_path):
-                    continue
 
-                img   = np.array(Image.open(os.path.join(img_dir, fname)).convert('RGB'))
-                img   = self._train_pipeline.apply(img)
-                label = np.array(Image.open(label_path).convert('L'))
+            img   = np.array(Image.open(os.path.join(img_dir, fname)).convert('RGB'))
+            img   = self._train_pipeline.apply(img)
+            label = np.array(Image.open(label_path).convert('L'))
 
-                img_pad = _pad_symmetric(img, self.target_h, self.target_w)
-                lbl_pad = _pad_symmetric(label, self.target_h, self.target_w)
-                _, lbl_bin = cv2.threshold(
-                    lbl_pad.astype(np.uint8), 127, 255, cv2.THRESH_BINARY
-                )
+            img_pad = _pad_symmetric(img,   self.target_h, self.target_w)
+            lbl_pad = _pad_symmetric(label, self.target_h, self.target_w)
+            _, lbl_bin = cv2.threshold(lbl_pad.astype(np.uint8), 127, 255, cv2.THRESH_BINARY)
 
-                x_list.append(img_pad)
-                y_list.append(np.expand_dims(lbl_bin, axis=-1))
+            x_list.append(img_pad)
+            y_list.append(np.expand_dims(lbl_bin, axis=-1))
 
         x = np.array(x_list, dtype=np.float32) / 255.0
         y = np.array(y_list, dtype=np.float32) / 255.0
         return x, y
+
+    def _load_skeleton_split(self, img_dir: str, label_dir: str,
+                              skel_dir: str) -> np.ndarray:
+        """Load skeleton PNGs aligned with _load_split ordering."""
+        if not os.path.isdir(img_dir):
+            return np.zeros((0,), dtype=np.float32)
+        files = sorted(f for f in os.listdir(img_dir)
+                       if f.lower().endswith('.png') and not f.startswith('.'))
+        skel_list = []
+        for fname in files:
+            base       = os.path.splitext(fname)[0]
+            label_name = f"{base}.ah.png"
+            label_path = os.path.join(label_dir, label_name)
+            if not os.path.exists(label_path):
+                continue
+            skel_path = os.path.join(skel_dir, label_name)
+            if os.path.exists(skel_path):
+                skel = np.array(
+                    Image.open(skel_path).convert('L'), dtype=np.float32
+                ) / 255.0
+            else:
+                lbl  = np.array(Image.open(label_path).convert('L'))
+                skel = np.zeros_like(lbl, dtype=np.float32)
+            skel_pad = _pad_symmetric(skel, self.target_h, self.target_w)
+            skel_list.append(np.expand_dims(skel_pad, axis=-1))
+        return np.array(skel_list, dtype=np.float32)

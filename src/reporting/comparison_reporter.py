@@ -12,6 +12,19 @@ _PRIMARY_METRICS = ["accuracy", "f1", "sensitivity", "specificity", "auc", "mcc"
 _ALL_METRICS     = _PRIMARY_METRICS + ["cldice", "betti0_error", "betti1_error"]
 _LOWER_IS_BETTER = {"betti0_error", "betti1_error"}
 
+_RC = {
+    "font.family":     "sans-serif",
+    "font.sans-serif": ["Helvetica", "Arial", "Helvetica Neue", "DejaVu Sans"],
+    "font.size":       9,
+    "axes.titlesize":  10,
+    "axes.labelsize":  9,
+    "xtick.labelsize": 8,
+    "ytick.labelsize": 8,
+    "legend.fontsize": 9,
+    "lines.linewidth": 1.0,
+    "axes.linewidth":  0.6,
+}
+
 # Category mapping for Section 4.6.2
 _LOSS_CATEGORIES = {
     "bce_mcc":   "Pixel-wise",
@@ -23,50 +36,80 @@ _LOSS_CATEGORIES = {
 }
 
 
+def _ms_extract(summary: Dict):
+    """Extract (vals_dict, stds_dict, n_seeds) from a multiseed summary."""
+    s = summary.get("summary", {})
+    vals = {lk: {m: info["mean"] for m, info in pm.items() if isinstance(info, dict)}
+            for lk, pm in s.items()}
+    stds = {lk: {m: info["std"]  for m, info in pm.items() if isinstance(info, dict)}
+            for lk, pm in s.items()}
+    n = summary.get("n_seeds", len(summary.get("seeds", [])))
+    return vals, stds, n
+
+
 class ComparisonReporter:
     """Generate all comparison artifacts for Section 4.6.
 
+    When *multiseed_summary* is provided (dict loaded from multiseed_summary.json),
+    bar and radar charts use per-loss means across seeds; bar chart adds ±1 SD
+    error bars. Falls back to single-seed results when not provided.
+
     Outputs per dataset:
-      - radar_chart_<dataset>.png   (spider chart, 6 metrics × 6 losses)
-      - bar_chart_<dataset>.png     (grouped bar chart per metric)
+      - radar_chart_<dataset>.png    (spider chart, 6 metrics × 6 losses)
+      - bar_chart_<dataset>.png      (grouped bar chart per metric)
       - ranking_table_<dataset>.json (ranked loss functions per metric)
+      - wilcoxon_<dataset>.{json,txt,png}
 
     Single Responsibility: reads existing *_results.json files and produces
     visual + tabular comparisons. Does not perform training or inference.
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(
+        self,
+        output_dir: Path,
+        multiseed_summary: Optional[Dict] = None,
+    ):
         self._out_dir = output_dir
+        self._ms      = multiseed_summary   # dataset-specific summary dict or None
 
     def generate_all(self, dataset: str = "drive") -> Dict[str, Path]:
-        """Load results and generate all comparison outputs.
-
-        Args:
-            dataset: 'drive' or 'stare'
-
-        Returns:
-            Dict mapping output type to saved Path.
-        """
-        results = self._load_results(dataset)
+        """Load results and generate all comparison outputs."""
+        results, stds, n_seeds = self._resolve_data(dataset)
         if not results:
             print(f"  [WARN] Tidak ada hasil evaluasi untuk dataset '{dataset}'.")
             return {}
 
         self._out_dir.mkdir(parents=True, exist_ok=True)
         paths: Dict[str, Path] = {}
-        paths["radar"]     = self._plot_radar(results, dataset)
-        paths["bar"]       = self._plot_bar(results, dataset)
-        paths["confusion"] = self._plot_confusion_matrices(results, dataset)
+        paths["radar"]     = self._plot_radar(results, stds, n_seeds, dataset)
+        paths["bar"]       = self._plot_bar(results, stds, n_seeds, dataset)
+        # Confusion matrix always uses raw pixel counts — load from reference files
+        raw_results = self._load_results(dataset, seed_fallback="seed42")
+        paths["confusion"] = self._plot_confusion_matrices(raw_results, dataset)
         paths["ranking"]   = self._save_ranking(results, dataset)
-        paths["wilcoxon"]  = self._run_wilcoxon_test(results, dataset)
+        paths["wilcoxon"]  = self._run_wilcoxon_test(raw_results, dataset)
         return paths
 
     # ── Loaders ──────────────────────────────────────────────────────────────
 
-    def _load_results(self, dataset: str) -> Dict[str, Dict]:
+    def _resolve_data(self, dataset: str):
+        """Return (results, stds, n_seeds). Prefers multiseed means."""
+        if (self._ms and
+                self._ms.get("dataset", "").lower() == dataset.lower()):
+            vals, stds, n = _ms_extract(self._ms)
+            return vals, stds, n
+        results = self._load_results(dataset)
+        return results, None, None
+
+    def _load_results(
+        self, dataset: str, seed_fallback: str = ""
+    ) -> Dict[str, Dict]:
+        """Load single-seed result JSONs. Falls back to seed_fallback tag."""
         results = {}
         for loss_key in LOSS_FUNCTIONS:
             path = RESULTS_DIR / dataset / f"{loss_key}_results.json"
+            if not path.exists() and seed_fallback:
+                path = RESULTS_DIR / dataset / f"{loss_key}_{seed_fallback}_results.json"
             if path.exists():
                 with open(path) as f:
                     results[loss_key] = json.load(f)
@@ -74,25 +117,27 @@ class ComparisonReporter:
 
     # ── Radar chart ───────────────────────────────────────────────────────────
 
-    def _plot_radar(self, results: Dict, dataset: str) -> Optional[Path]:
+    def _plot_radar(
+        self,
+        results:  Dict,
+        stds:     Optional[Dict],
+        n_seeds:  Optional[int],
+        dataset:  str,
+    ) -> Optional[Path]:
         try:
             import matplotlib
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            print("  [WARN] matplotlib tidak terinstall, skip radar chart.")
+            print("  [WARN] matplotlib not installed, skipping radar chart.")
             return None
 
-        # Overlap + topology metrics; Betti errors inverted (lower raw = outer ring)
         metrics = _ALL_METRICS
         n_m     = len(metrics)
         angles  = np.linspace(0, 2 * np.pi, n_m, endpoint=False).tolist()
         angles += angles[:1]
 
         _MARKERS = ['o', 's', '^', 'D', 'v', 'P']
-
-        # Per-metric min-max normalisation → [_LO, _HI]
-        # Betti errors inverted so that outer ring always = better for all metrics.
         _LO, _HI = 0.08, 0.92
         metric_stats: Dict[str, tuple] = {}
         for m in metrics:
@@ -102,77 +147,84 @@ class ComparisonReporter:
         def _norm(val_raw: float, m: str) -> float:
             lo, hi = metric_stats[m]
             rng = (hi - lo) if (hi - lo) > 1e-9 else 1e-9
-            t   = (val_raw - lo) / rng          # 0.0 (lo) → 1.0 (hi)
+            t   = (val_raw - lo) / rng
             if m in _LOWER_IS_BETTER:
-                t = 1.0 - t                      # invert: low raw = outer ring
+                t = 1.0 - t
             return _LO + t * (_HI - _LO)
 
-        # Spoke labels (from shared METRIC_LABELS, Betti use multi-line versions)
         _spoke_label = {
             **METRIC_LABELS,
-            "betti0_error": "β₀ Error\n(↓ lebih kecil\nlebih baik)",
-            "betti1_error": "β₁ Error\n(↓ lebih kecil\nlebih baik)",
+            "betti0_error": "β₀ Error\n(↓ better)",
+            "betti1_error": "β₁ Error\n(↓ better)",
         }
         spoke_labels = [_spoke_label.get(m, m.upper()) for m in metrics]
 
-        fig, ax = plt.subplots(figsize=(11, 12), subplot_kw=dict(polar=True))
-        fig.patch.set_facecolor("#ffffff")
-        ax.set_facecolor("#f8f9fa")
+        with matplotlib.rc_context(_RC):
+            fig, ax = plt.subplots(figsize=(7.5, 8.0), subplot_kw=dict(polar=True))
+            fig.patch.set_facecolor("#ffffff")
+            ax.set_facecolor("#f8f9fa")
 
-        for idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
-            if loss_key not in results:
-                continue
-            color     = LOSS_COLORS.get(loss_key, "#aaaaaa")
-            marker    = _MARKERS[idx % len(_MARKERS)]
-            norm_vals = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
-            norm_vals += norm_vals[:1]
-            ax.plot(angles, norm_vals,
-                    color=color, lw=2.2, linestyle="-",
-                    marker=marker, markersize=7, markerfacecolor=color,
-                    markeredgecolor="white", markeredgewidth=0.8,
-                    label=loss_label.replace(" (Baseline)", ""),
-                    zorder=3)
-            ax.fill(angles, norm_vals, color=color, alpha=0.05, zorder=2)
+            for idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
+                if loss_key not in results:
+                    continue
+                color     = LOSS_COLORS.get(loss_key, "#aaaaaa")
+                marker    = _MARKERS[idx % len(_MARKERS)]
+                norm_vals = [_norm(results[loss_key].get(m, 0), m) for m in metrics]
+                norm_vals += norm_vals[:1]
+                ax.plot(angles, norm_vals,
+                        color=color, lw=1.8, linestyle="-",
+                        marker=marker, markersize=6, markerfacecolor=color,
+                        markeredgecolor="white", markeredgewidth=0.7,
+                        label=loss_label.replace(" (Baseline)", ""),
+                        zorder=3)
+                ax.fill(angles, norm_vals, color=color, alpha=0.07, zorder=2)
 
-        # Radial grid rings
-        r_ticks = np.linspace(_LO, _HI, 5)
-        ax.set_ylim(0.0, 1.0)
-        ax.set_yticks(r_ticks.tolist())
-        ax.set_yticklabels(["Terburuk", "", "", "", "Terbaik"],
-                           fontsize=7, color="#888888")
-        ax.yaxis.set_tick_params(pad=6)
+            r_ticks = np.linspace(_LO, _HI, 5)
+            ax.set_ylim(0.0, 1.0)
+            ax.set_yticks(r_ticks.tolist())
+            ax.set_yticklabels(["Worst", "", "", "", "Best"],
+                               fontsize=7, color="#888888")
+            ax.yaxis.set_tick_params(pad=6)
 
-        ax.set_xticks(angles[:-1])
-        ax.set_xticklabels(spoke_labels, fontsize=9, color="#222222")
+            ax.set_xticks(angles[:-1])
+            ax.set_xticklabels(spoke_labels, fontsize=8, color="#222222")
 
-        # Spoke grid: slightly darker than default
-        ax.grid(color="#cccccc", linestyle="-", linewidth=0.6, alpha=0.8)
-        ax.spines["polar"].set_color("#cccccc")
+            ax.grid(color="#cccccc", linestyle="-", linewidth=0.6, alpha=0.8)
+            ax.spines["polar"].set_color("#cccccc")
+            ax.spines["polar"].set_linewidth(0.5)
 
-        ax.set_title(
-            f"Loss Function Comparison — {dataset.upper()}",
-            fontsize=12, fontweight="bold", pad=30, color="#111111",
-        )
+            ms_note = (f"\nMean ± SD, N={n_seeds} seeds"
+                       if stds is not None and n_seeds else "")
+            ax.set_title(
+                f"Loss Function Comparison — {dataset.upper()}{ms_note}",
+                fontsize=10, fontweight="bold", pad=28, color="#111111",
+            )
 
-        handles, labels = ax.get_legend_handles_labels()
-        fig.legend(
-            handles, labels,
-            loc="lower center", ncol=3,
-            bbox_to_anchor=(0.5, 0.01),
-            fontsize=9.5, framealpha=0.95,
-            edgecolor="#dddddd",
-        )
+            handles, labels = ax.get_legend_handles_labels()
+            fig.legend(
+                handles, labels,
+                loc="lower center", ncol=3,
+                bbox_to_anchor=(0.5, 0.01),
+                fontsize=9, framealpha=0.95,
+                edgecolor="#dddddd",
+            )
 
-        path = self._out_dir / f"radar_chart_{dataset}.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight",
-                    facecolor=fig.get_facecolor())
-        plt.close(fig)
+            path = self._out_dir / f"radar_chart_{dataset}.png"
+            fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                        facecolor="white", edgecolor="none")
+            plt.close(fig)
         print(f"  Radar chart: {path}")
         return path
 
     # ── Bar chart ─────────────────────────────────────────────────────────────
 
-    def _plot_bar(self, results: Dict, dataset: str) -> Optional[Path]:
+    def _plot_bar(
+        self,
+        results:  Dict,
+        stds:     Optional[Dict],
+        n_seeds:  Optional[int],
+        dataset:  str,
+    ) -> Optional[Path]:
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -180,12 +232,12 @@ class ComparisonReporter:
         except ImportError:
             return None
 
-        # Overlap + topology metrics
         metrics = _ALL_METRICS
         _y_axis_label = {
             "betti0_error": "Error Count",
             "betti1_error": "Error Count",
         }
+        multiseed = stds is not None
 
         loss_keys   = [k for k in LOSS_FUNCTIONS if k in results]
         loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
@@ -194,69 +246,85 @@ class ComparisonReporter:
 
         n_cols = 3
         n_rows = (len(metrics) + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(
-            n_rows, n_cols,
-            figsize=(16, 6 * n_rows),
-            gridspec_kw={"hspace": 0.80, "wspace": 0.40},
-        )
-        fig.suptitle(
-            f"Loss Function Comparison — {dataset.upper()}",
-            fontsize=12, fontweight="bold",
-        )
-        axes_flat = np.array(axes).flatten()
+        subtitle = (f"Mean ± SD  (N={n_seeds} seeds)" if multiseed
+                    else "Single-seed evaluation")
 
-        for m_idx, mkey in enumerate(metrics):
-            ax     = axes_flat[m_idx]
-            mlabel = METRIC_LABELS.get(mkey, mkey.upper())
-            mcolor = METRIC_COLORS.get(mkey, "#111111")
-            vals   = [results[k].get(mkey, 0) for k in loss_keys]
-            lower_better = mkey in _LOWER_IS_BETTER
+        with matplotlib.rc_context(_RC):
+            fig, axes = plt.subplots(
+                n_rows, n_cols,
+                figsize=(14, 5 * n_rows),
+                gridspec_kw={"hspace": 0.80, "wspace": 0.42},
+            )
+            fig.patch.set_facecolor("#ffffff")
+            fig.suptitle(
+                f"Loss Function Comparison — {dataset.upper()}\n{subtitle}",
+                fontsize=10, fontweight="bold",
+            )
+            axes_flat = np.array(axes).flatten()
 
-            v_min = min(vals)
-            v_max = max(vals)
-            span  = (v_max - v_min) if (v_max - v_min) > 1e-9 else 0.02
+            for m_idx, mkey in enumerate(metrics):
+                ax     = axes_flat[m_idx]
+                mlabel = METRIC_LABELS.get(mkey, mkey.upper())
+                mcolor = METRIC_COLORS.get(mkey, "#111111")
+                vals   = [results[k].get(mkey, 0) for k in loss_keys]
+                errs   = ([stds[k].get(mkey, 0) for k in loss_keys]
+                          if multiseed else None)
+                lower_better = mkey in _LOWER_IS_BETTER
 
-            y_min = max(0.0, v_min - span * 0.4)
-            y_max = v_max + span * 0.6
-            if not lower_better:
-                y_max = min(100.0, y_max)
-            if (y_max - y_min) < 0.01:
-                y_min = max(0.0, v_min - 0.05)
-                y_max = v_max + 0.05
-            label_offset = (y_max - y_min) * 0.02
+                if errs:
+                    effective_max = max(v + e for v, e in zip(vals, errs))
+                    effective_min = min(v - e for v, e in zip(vals, errs))
+                else:
+                    effective_max, effective_min = max(vals), min(vals)
 
-            for i, (k, color) in enumerate(zip(loss_keys, colors)):
-                v = results[k].get(mkey, 0)
-                ax.bar(i, v, width=0.65, color=color, alpha=0.85,
-                       edgecolor="white", label=loss_labels[i])
-                ax.text(i, v + label_offset, f"{v:.2f}",
-                        ha="center", va="bottom", fontsize=7, rotation=45)
+                span = (effective_max - effective_min) if (effective_max - effective_min) > 1e-9 else 0.02
+                y_min = max(0.0, effective_min - span * 0.4)
+                y_max = effective_max + span * 0.6
+                if not lower_better:
+                    y_max = min(100.0, y_max)
+                if (y_max - y_min) < 0.01:
+                    y_min = max(0.0, effective_min - 0.05)
+                    y_max = effective_max + 0.05
+                label_offset = (y_max - y_min) * 0.02
 
-            ax.set_xticks(range(n_losses))
-            ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=8)
-            ax.set_ylabel(_y_axis_label.get(mkey, "Score (%)"), fontsize=9)
-            ax.set_title(mlabel, fontsize=10, fontweight="bold", color=mcolor)
-            ax.set_xlim(-0.6, n_losses - 0.4)
-            ax.set_ylim(y_min, y_max)
-            ax.grid(axis="y", alpha=0.3)
+                for i, (k, color) in enumerate(zip(loss_keys, colors)):
+                    v   = results[k].get(mkey, 0)
+                    err = errs[i] if errs else None
+                    ax.bar(i, v, width=0.65, color=color, alpha=0.85,
+                           edgecolor="white", label=loss_labels[i])
+                    if err is not None:
+                        ax.errorbar(i, v, yerr=err, fmt="none",
+                                    color="#333333", capsize=4, capthick=1.2,
+                                    lw=1.4, zorder=5)
+                    top = (v + err + label_offset) if err is not None else (v + label_offset)
+                    txt = f"{v:.2f}\n±{err:.2f}" if err is not None else f"{v:.2f}"
+                    ax.text(i, top, txt, ha="center", va="bottom", fontsize=7)
 
-        # Hide unused panels
-        for idx in range(len(metrics), len(axes_flat)):
-            axes_flat[idx].axis("off")
+                ax.set_xticks(range(n_losses))
+                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=8)
+                ax.set_ylabel(_y_axis_label.get(mkey, "Score (%)"), fontsize=9)
+                ax.set_title(mlabel, fontsize=10, fontweight="bold", color=mcolor)
+                ax.set_xlim(-0.6, n_losses - 0.4)
+                ax.set_ylim(y_min, y_max)
+                ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
-        # Single figure-level legend below all subplots
-        handles, labels = axes_flat[0].get_legend_handles_labels()
-        fig.legend(
-            handles, labels,
-            loc="lower center", ncol=min(n_losses, 3),
-            bbox_to_anchor=(0.5, -0.02),
-            fontsize=9, framealpha=0.9,
-        )
+            for idx in range(len(metrics), len(axes_flat)):
+                axes_flat[idx].axis("off")
 
-        path = self._out_dir / f"bar_chart_{dataset}.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight")
-        plt.close(fig)
-        print(f"  Bar chart: {path}")
+            handles, labels = axes_flat[0].get_legend_handles_labels()
+            fig.legend(
+                handles, labels,
+                loc="lower center", ncol=min(n_losses, 3),
+                bbox_to_anchor=(0.5, -0.02),
+                fontsize=9, framealpha=0.9, edgecolor="#dddddd",
+            )
+
+            path = self._out_dir / f"bar_chart_{dataset}.png"
+            fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                        facecolor="white", edgecolor="none")
+            plt.close(fig)
+        mode = "multi-seed Mean±SD" if multiseed else "single-seed"
+        print(f"  Bar chart ({mode}): {path}")
         return path
 
     # ── Confusion matrix grid ─────────────────────────────────────────────────
@@ -280,7 +348,7 @@ class ComparisonReporter:
             matplotlib.use("Agg")
             import matplotlib.pyplot as plt
         except ImportError:
-            print("  [WARN] matplotlib tidak terinstall, skip confusion matrix.")
+            print("  [WARN] matplotlib not installed, skipping confusion matrix.")
             return None
 
         loss_keys   = [k for k in LOSS_FUNCTIONS if k in results]
@@ -289,19 +357,14 @@ class ComparisonReporter:
 
         n_cols = 3
         n_rows = (n + n_cols - 1) // n_cols
-        fig, axes = plt.subplots(
-            n_rows, n_cols,
-            figsize=(n_cols * 4.8, n_rows * 4.6),
-            gridspec_kw={"hspace": 0.60, "wspace": 0.40},
-        )
-        axes_flat = np.array(axes).flatten()
 
-        # Cell colours (RGB 0–1) — consistent with visualization_reporter
+        # Colorblind-safe palette (Wong 2011) — same as visualization_reporter error map:
+        # TP=bluish-green (#009E73), TN=white→teal hint, FP=orange (#E69F00), FN=blue (#0072B2)
         _CELL_COLOR = {
-            "TN": np.array([0.55, 0.88, 0.55]),   # hijau muda
-            "FP": np.array([0.92, 0.40, 0.40]),   # merah
-            "FN": np.array([0.40, 0.40, 0.92]),   # biru
-            "TP": np.array([0.10, 0.68, 0.10]),   # hijau tua
+            "TN": np.array([0.20, 0.63, 0.63]),    # teal hint — true negative
+            "FP": np.array([0.902, 0.624, 0.000]), # orange    — false positive
+            "FN": np.array([0.000, 0.447, 0.698]), # blue      — false negative
+            "TP": np.array([0.000, 0.620, 0.451]), # bluish-green — true positive
         }
         # [row][col] mapping: row=Actual, col=Predicted
         _CELL_KEY = [["TN", "FP"],   # Actual = Background
@@ -363,7 +426,7 @@ class ComparisonReporter:
                         pct_str   = f"({pct:.2f}%)"
                     else:
                         count_str = f"{cnt * 100:.2f}%"
-                        pct_str   = "(~estimasi)"
+                        pct_str   = "(~approx.)"
 
                     ax.text(c, r - 0.18, cell_key,
                             ha="center", va="center",
@@ -376,32 +439,33 @@ class ComparisonReporter:
                             fontsize=8, color=txt_col)
 
             ax.set_xticks([0, 1])
-            ax.set_xticklabels(["Prediksi\nBackground", "Prediksi\nVessel"],
+            ax.set_xticklabels(["Pred.\nBackground", "Pred.\nVessel"],
                                 fontsize=9)
             ax.set_yticks([0, 1])
-            ax.set_yticklabels(["Aktual\nBackground", "Aktual\nVessel"],
+            ax.set_yticklabels(["Actual\nBackground", "Actual\nVessel"],
                                 fontsize=9)
             ax.tick_params(length=0)
             ax.set_title(label, fontsize=10, fontweight="bold", pad=10)
             if not has_counts:
-                ax.set_xlabel("⚠ Re-run evaluasi untuk pixel counts",
+                ax.set_xlabel("⚠ Re-run evaluation for pixel counts",
                               fontsize=7, color="gray")
 
-        # Hide unused panels
         for idx in range(n, len(axes_flat)):
             axes_flat[idx].axis("off")
 
         subtitle = (
-            "Rata-rata jumlah pixel per gambar test (total ÷ jumlah gambar)\n"
-            "Persentase relatif terhadap total pixel rata-rata per gambar"
+            "Average pixel count per test image  (total ÷ number of images)\n"
+            "Percentage relative to average total pixels per image"
         )
-        fig.suptitle(
-            f"Confusion Matrix — {dataset.upper()}\n{subtitle}",
-            fontsize=11, fontweight="bold",
-        )
+        with matplotlib.rc_context(_RC):
+            fig.suptitle(
+                f"Confusion Matrix — {dataset.upper()}\n{subtitle}",
+                fontsize=10, fontweight="bold",
+            )
 
         path = self._out_dir / f"confusion_matrix_{dataset}.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                    facecolor="white", edgecolor="none")
         plt.close(fig)
         print(f"  Confusion matrix: {path}")
         return path
@@ -580,28 +644,31 @@ class ComparisonReporter:
                 ("f1",     "F1 Score (Overlap)"),
                 ("cldice", "clDice (Topology)"),
             ]
-            fig, axes = plt.subplots(1, 2, figsize=(16, 7),
-                                     gridspec_kw={"wspace": 0.45})
-            fig.suptitle(
-                f"Wilcoxon Signed-Rank Test — {dataset.upper()}\n"
-                f"Hijau = signifikan  |  * p<0.05   ** p<0.01",
-                fontsize=11, fontweight="bold",
-            )
+            with matplotlib.rc_context(_RC):
+                fig, axes = plt.subplots(1, 2, figsize=(13, 6),
+                                         gridspec_kw={"wspace": 0.45})
+                fig.patch.set_facecolor("#ffffff")
+                fig.suptitle(
+                    f"Wilcoxon Signed-Rank Test — {dataset.upper()}\n"
+                    f"Green = significant  |  * p<0.05   ** p<0.01",
+                    fontsize=10, fontweight="bold",
+                )
 
-            for ax, (mkey, mlabel) in zip(axes, heatmap_specs):
-                mat = _build_matrix(mkey)
-                im  = ax.imshow(mat, cmap="RdYlGn_r", vmin=0.0, vmax=0.10,
-                                aspect="auto")
-                plt.colorbar(im, ax=ax, label="p-value", shrink=0.85)
-                ax.set_xticks(range(n)); ax.set_yticks(range(n))
-                ax.set_xticklabels(short_labels, rotation=30, ha="right", fontsize=9)
-                ax.set_yticklabels(short_labels, fontsize=9)
-                ax.set_title(mlabel, fontsize=10, fontweight="bold")
-                _annotate(ax, mat)
+                for ax, (mkey, mlabel) in zip(axes, heatmap_specs):
+                    mat = _build_matrix(mkey)
+                    im  = ax.imshow(mat, cmap="RdYlGn_r", vmin=0.0, vmax=0.10,
+                                    aspect="auto")
+                    plt.colorbar(im, ax=ax, label="p-value", shrink=0.85)
+                    ax.set_xticks(range(n)); ax.set_yticks(range(n))
+                    ax.set_xticklabels(short_labels, rotation=30, ha="right", fontsize=8)
+                    ax.set_yticklabels(short_labels, fontsize=8)
+                    ax.set_title(mlabel, fontsize=10, fontweight="bold")
+                    _annotate(ax, mat)
 
-            heatmap_path = self._out_dir / f"wilcoxon_heatmap_{dataset}.png"
-            fig.savefig(str(heatmap_path), dpi=150, bbox_inches="tight")
-            plt.close(fig)
+                heatmap_path = self._out_dir / f"wilcoxon_heatmap_{dataset}.png"
+                fig.savefig(str(heatmap_path), dpi=300, bbox_inches="tight",
+                            facecolor="white", edgecolor="none")
+                plt.close(fig)
             print(f"  Wilcoxon heatmap: {heatmap_path}")
         except Exception as e:
             print(f"  [WARN] Gagal membuat heatmap Wilcoxon: {e}")

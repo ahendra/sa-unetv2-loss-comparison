@@ -18,8 +18,35 @@ from src.reporting import (
     AblationReporter, ClaheTuningReporter, CombinedHistoryReporter,
     ComparisonBarReporter, ComparisonReporter, ComparisonReporterEN,
     ComputationalTimeReporter, EnvironmentReporter, HistoryReporter,
-    TuningPlotReporter, VisualizationReporter,
+    MultiSeedReporter, TuningPlotReporter, VisualizationReporter,
 )
+
+
+def _load_multiseed_summary(ds: str) -> Optional[dict]:
+    """Load multiseed_summary.json for a single dataset (drive/stare), or None."""
+    p = (RESULTS_DIR / ds / "reports"
+         / "section_4_10_multiseed" / ds / "multiseed_summary.json")
+    if p.exists():
+        with open(p) as f:
+            return json.load(f)
+    return None
+
+
+def _load_multiseed_summaries() -> dict:
+    """Return {ds: summary_dict} for both drive and stare (skip missing)."""
+    out = {}
+    for ds in ("drive", "stare"):
+        s = _load_multiseed_summary(ds)
+        if s:
+            out[ds] = s
+    return out
+
+
+def _seeds_from_summary(summary: Optional[dict]) -> list:
+    """Extract seed list from a multiseed summary dict, empty list if None."""
+    if not summary:
+        return []
+    return summary.get("seeds", [])
 
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
@@ -91,8 +118,9 @@ def _run_augmentation_drive() -> None:
     print("  Spesifikasi augmentasi (SA-UNetV2 paper):")
     print("    randomRotation ×3, randomColor ×3, randomGaussian ×3")
     print("    h-flip ×1, v-flip ×1, hv-flip ×1  →  12 augmentasi/gambar")
-    print("    + copy gambar original → total 260 gambar")
-    print("    Split: 234 train / 26 validate (proporsional per tipe)\n")
+    print("    + copy gambar original → 13 file/gambar asli")
+    print("    Split di level gambar ASLI (seed=42): 18 train | 2 validate")
+    print("    → 18 × 13 = 234 train  |  2 × 13 = 26 validate\n")
 
     if not Path(cfg.train_images).is_dir():
         print(f"  [ERROR] Direktori tidak ditemukan: {cfg.train_images}")
@@ -160,8 +188,9 @@ def _run_augmentation_stare() -> None:
     print("  Spesifikasi augmentasi (SA-UNetV2 paper — STARE):")
     print("    randomRotation ×3, randomColor ×3, randomGaussian ×3")
     print("    h-flip ×1, v-flip ×1, hv-flip ×1  →  12 augmentasi/gambar")
-    print("    + copy gambar original → total 208 gambar (16 asli × 13)")
-    print("    Split: 187 train / 21 validate (random, random_state=42)\n")
+    print("    + copy gambar original → 13 file/gambar asli")
+    print("    Split di level gambar ASLI (seed=42): 14 train | 2 validate")
+    print("    → 14 × 13 = 182 train  |  2 × 13 = 26 validate\n")
 
     if not Path(cfg.train_images).is_dir():
         print(f"  [ERROR] Direktori tidak ditemukan: {cfg.train_images}")
@@ -292,18 +321,151 @@ def _ensure_aug_dir(cfg) -> bool:
     return True
 
 
+def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
+    """Train satu fungsi loss berulang kali dengan seed berbeda → tampilkan mean ± SD."""
+    _header(f"Multi-Seed Experiment — {cfg.name}")
+    print("  Training diulang dengan beberapa seed berbeda.")
+    print("  Setiap run disimpan sebagai bobot terpisah (misal: bce_mcc_seed42.weights.h5).")
+    print("  Gunakan hasil ini untuk melaporkan mean ± SD ke reviewer.\n")
+
+    # Pilih fungsi loss
+    loss_items = list(LOSS_FUNCTIONS.items())
+    print("  Pilih fungsi loss:\n")
+    choice = _prompt([v for _, v in loss_items], back_label="Kembali")
+    if choice == 0:
+        return
+    loss_key, loss_label = loss_items[choice - 1]
+
+    # Input seeds
+    print(f"\n  Loss dipilih: {loss_label}")
+    print("  Contoh input seeds: 42 0 123 456 789")
+    raw = input("  Masukkan seeds (pisahkan spasi): ").strip()
+    seeds = []
+    for s in raw.split():
+        try:
+            seeds.append(int(s))
+        except ValueError:
+            pass
+    if not seeds:
+        print("  [ERROR] Tidak ada seed valid. Kembali.")
+        input("  Tekan Enter...")
+        return
+
+    print(f"\n  Akan melatih {len(seeds)} run dengan seeds: {seeds}")
+    print(f"  Weight files: {loss_key}_seed<N>.weights.h5")
+    confirm = input("  Mulai? (y/n): ").strip().lower()
+    if confirm != 'y':
+        return
+
+    # Muat data sekali
+    x_train, y_train, x_val, y_val = _load_training_data(cfg)
+    if x_train is None:
+        return
+
+    if loss_key == "skel_recall":
+        if not _ensure_skel_dir(cfg):
+            input("  Tekan Enter...")
+            return
+        y_train, y_val = _stack_skeleton(cfg, y_train, y_val)
+
+    loss_fn = get_loss_function(loss_key)
+
+    # Training loop
+    val_losses_best: list = []
+    val_accs_best: list   = []
+    elapsed_list: list    = []
+
+    for seed in seeds:
+        tag = f"seed{seed}"
+        print(f"\n{'=' * 60}")
+        print(f"  Run seed={seed}  →  tag={tag}")
+        print('=' * 60)
+
+        if trainer.weights_exist(loss_key, seed_tag=tag):
+            ans = input(f"  Bobot '{tag}' sudah ada. Latih ulang? (y/n): ").strip().lower()
+            if ans != 'y':
+                print("  Dilewati — memuat history yang ada.")
+                hist = trainer.load_history(loss_key, seed_tag=tag)
+                if hist:
+                    vl = hist.get("val_loss", [])
+                    va = hist.get("val_accuracy", [])
+                    if vl:
+                        val_losses_best.append(min(vl))
+                        best_ep = vl.index(min(vl))
+                        if va and best_ep < len(va):
+                            val_accs_best.append(va[best_ep])
+                    elapsed_list.append(hist.get("elapsed_sec", 0.0))
+                continue
+
+        trainer.train(loss_key, loss_fn, x_train, y_train, x_val, y_val,
+                      seed=seed, seed_tag=tag)
+
+        hist = trainer.load_history(loss_key, seed_tag=tag)
+        if hist:
+            vl = hist.get("val_loss", [])
+            va = hist.get("val_accuracy", [])
+            if vl:
+                val_losses_best.append(min(vl))
+                best_ep = vl.index(min(vl))
+                if va and best_ep < len(va):
+                    val_accs_best.append(va[best_ep])
+            elapsed_list.append(hist.get("elapsed_sec", 0.0))
+
+    # Ringkasan mean ± SD
+    print(f"\n{'═' * 60}")
+    print(f"  Ringkasan Multi-Seed: {loss_label} ({cfg.name})")
+    print(f"{'═' * 60}")
+    print(f"  Seeds     : {seeds}")
+    print(f"  Runs      : {len(val_losses_best)}/{len(seeds)}")
+
+    if val_losses_best:
+        mean_vl = float(np.mean(val_losses_best))
+        std_vl  = float(np.std(val_losses_best))
+        print(f"\n  Best Val Loss  : {mean_vl:.5f} ± {std_vl:.5f}")
+        for seed, vl in zip(seeds, val_losses_best):
+            print(f"    seed={seed:<6}: {vl:.5f}")
+
+    if val_accs_best:
+        mean_va = float(np.mean(val_accs_best))
+        std_va  = float(np.std(val_accs_best))
+        print(f"\n  Best Val Acc   : {mean_va:.4f} ± {std_va:.4f}")
+
+    if elapsed_list:
+        total = sum(elapsed_list)
+        print(f"\n  Total waktu    : {total:.0f}s  ({total/60:.1f} menit)")
+
+    print(f"\n  Bobot tersimpan di:")
+    for seed in seeds:
+        tag = f"seed{seed}"
+        wp  = trainer._weight_path(loss_key, tag)
+        status = "✓" if wp.exists() else "✗"
+        print(f"    [{status}] {wp.name}")
+
+    print(f"\n  Untuk mean ± SD metrik test (F1, AUC, dll):")
+    print(f"  → Jalankan Evaluasi per seed via menu Evaluasi.")
+    print(f"  → Pilih loss '{loss_label}', lalu masukkan seed tag saat diminta.")
+
+    input("\n  Tekan Enter untuk kembali...")
+
+
 def _loss_selection_menu(trainer: ModelTrainer, cfg) -> None:
     _header(f"Training Model — {cfg.name}")
     print("  Pilih fungsi loss:\n")
 
     loss_items = list(LOSS_FUNCTIONS.items())
-    options = [f"{v}" for _, v in loss_items] + ["Semua Fungsi Loss (Train All)"]
+    options = (
+        [f"{v}" for _, v in loss_items]
+        + ["Semua Fungsi Loss (Train All)"]
+        + ["Multi-Seed Experiment (Mean ± SD)"]
+    )
 
     choice = _prompt(options, back_label="Kembali ke menu dataset")
     if choice == 0:
         return
-    if choice == len(options):
+    if choice == len(loss_items) + 1:
         _train_all(trainer, cfg)
+    elif choice == len(loss_items) + 2:
+        _multi_seed_train_menu(trainer, cfg)
     else:
         key, label = loss_items[choice - 1]
         _train_single(trainer, cfg, key, label)
@@ -403,12 +565,19 @@ def _load_training_data(cfg):
 
 def _evaluation_menu(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> None:
     _header(f"Evaluasi Model — {cfg.name}")
-    print("  Pilih loss/model yang akan dievaluasi:\n")
+
+    # Tanya seed tag (opsional — kosong = model default tanpa tag)
+    print("  Seed tag (opsional): kosongkan untuk model default,")
+    print("  atau masukkan tag seed (contoh: seed42, seed0, seed123)")
+    seed_tag = input("  Seed tag: ").strip()
+    if seed_tag:
+        print(f"  → Mengevaluasi bobot dengan tag: [{seed_tag}]")
+    print()
 
     loss_items = list(LOSS_FUNCTIONS.items())
     options = [
         f"{v}"
-        + (" [✓ bobot]" if trainer.weights_exist(k) else "")
+        + (" [✓ bobot]" if trainer.weights_exist(k, seed_tag=seed_tag) else "")
         + (" [✓ hasil]" if evaluator.results_exist(k) else "")
         for k, v in loss_items
     ] + ["Evaluasi Semua Model"]
@@ -417,34 +586,39 @@ def _evaluation_menu(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> N
     if choice == 0:
         return
     if choice == len(options):
-        _evaluate_all(trainer, evaluator, cfg)
+        _evaluate_all(trainer, evaluator, cfg, seed_tag=seed_tag)
     else:
         key, label = loss_items[choice - 1]
-        _evaluate_single(trainer, evaluator, cfg, key)
+        _evaluate_single(trainer, evaluator, cfg, key, seed_tag=seed_tag)
 
 
-def _evaluate_single(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg, loss_key: str) -> None:
-    if not trainer.weights_exist(loss_key):
-        print(f"\n  [ERROR] Bobot untuk '{loss_key}' tidak ditemukan. Lakukan training terlebih dahulu.")
+def _evaluate_single(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg,
+                     loss_key: str, seed_tag: str = "") -> None:
+    if not trainer.weights_exist(loss_key, seed_tag=seed_tag):
+        tag_info = f" [seed_tag={seed_tag}]" if seed_tag else ""
+        print(f"\n  [ERROR] Bobot untuk '{loss_key}'{tag_info} tidak ditemukan. Lakukan training terlebih dahulu.")
         input("  Tekan Enter untuk kembali...")
         return
 
     try:
-        print(f"\n  Memuat model dengan bobot '{loss_key}'...")
-        model = trainer.load_weights(loss_key)
+        tag_info = f" [seed_tag={seed_tag}]" if seed_tag else ""
+        print(f"\n  Memuat model dengan bobot '{loss_key}'{tag_info}...")
+        model = trainer.load_weights(loss_key, seed_tag=seed_tag)
 
         x_test, y_test, masks, restore_fn = _load_test_data(cfg)
         if x_test is None:
             return
 
-        evaluator.evaluate(model, loss_key, x_test, y_test, masks, restore_fn)
+        evaluator.evaluate(model, loss_key, x_test, y_test, masks, restore_fn,
+                           seed_tag=seed_tag)
     except Exception as e:
         print(f"\n  [ERROR] Evaluasi gagal: {e}")
 
     input("\n  Tekan Enter untuk kembali...")
 
 
-def _evaluate_all(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> None:
+def _evaluate_all(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg,
+                  seed_tag: str = "") -> None:
     x_test, y_test, masks, restore_fn = _load_test_data(cfg)
     if x_test is None:
         return
@@ -452,11 +626,12 @@ def _evaluate_all(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> None
     for loss_key in LOSS_FUNCTIONS:
         print(f"\n{'=' * 60}")
         print(f"  Evaluasi: {LOSS_FUNCTIONS[loss_key]}")
-        if not trainer.weights_exist(loss_key):
-            print(f"  [SKIP] Tidak ada bobot untuk '{loss_key}'.")
+        if not trainer.weights_exist(loss_key, seed_tag=seed_tag):
+            tag_info = f" [{seed_tag}]" if seed_tag else ""
+            print(f"  [SKIP] Tidak ada bobot untuk '{loss_key}'{tag_info}.")
             continue
         try:
-            model = trainer.load_weights(loss_key)
+            model = trainer.load_weights(loss_key, seed_tag=seed_tag)
             evaluator.evaluate(model, loss_key, x_test, y_test, masks, restore_fn)
         except Exception as e:
             print(f"  [ERROR] {e}")
@@ -615,6 +790,7 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
             "4.7  Training History Gabungan (DRIVE + STARE)",
             "4.8  Tuning Hyperparameter Loss — Regenerate Charts",
             "4.9  Computational Time Analysis (Epochs + Benchmark + Scatter)",
+            "4.10 Multi-Seed Analysis + Statistical Significance (Wilcoxon)",
             "Generate Semua Report",
         ],
         back_label="Kembali",
@@ -646,6 +822,8 @@ def _reporting_menu(cfg, trainer: ModelTrainer) -> None:
     elif choice == 12:
         _run_computational_time_report(base / "section_4_9_computational_time")
     elif choice == 13:
+        _run_multiseed_report(cfg, base / "section_4_10_multiseed")
+    elif choice == 14:
         _run_all_reports(cfg, trainer, base)
 
 
@@ -676,7 +854,9 @@ def _run_clahe_tuning_report(out_dir) -> None:
 
 
 def _run_history_report(cfg, trainer: ModelTrainer, out_dir) -> None:
-    reporter = HistoryReporter(cfg, trainer, out_dir)
+    ms_summary = _load_multiseed_summary(cfg.name.lower())
+    seeds      = _seeds_from_summary(ms_summary)
+    reporter   = HistoryReporter(cfg, trainer, out_dir, seeds=seeds or None)
     paths = reporter.generate_all()
     if paths:
         print(f"\n  {len(paths)} kurva training tersimpan.")
@@ -710,7 +890,8 @@ def _run_visualization_report_en(cfg, _trainer: ModelTrainer, out_dir) -> None:
 
 
 def _run_comparison_report(cfg, out_dir) -> None:
-    reporter = ComparisonReporter(out_dir)
+    ms_summary = _load_multiseed_summary(cfg.name.lower())
+    reporter   = ComparisonReporter(out_dir, multiseed_summary=ms_summary)
     paths = reporter.generate_all(dataset=cfg.name.lower())
     if paths:
         print(f"\n  {len(paths)} file comparison tersimpan.")
@@ -718,7 +899,8 @@ def _run_comparison_report(cfg, out_dir) -> None:
 
 
 def _run_comparison_report_en(out_dir) -> None:
-    reporter = ComparisonReporterEN(out_dir)
+    ms = _load_multiseed_summaries()
+    reporter = ComparisonReporterEN(out_dir, multiseed_summaries=ms or None)
     path = reporter.generate()
     if path:
         print(f"\n  File tersimpan: {path}")
@@ -726,7 +908,8 @@ def _run_comparison_report_en(out_dir) -> None:
 
 
 def _run_comparison_bar_report(out_dir) -> None:
-    reporter = ComparisonBarReporter(out_dir)
+    ms = _load_multiseed_summaries()
+    reporter = ComparisonBarReporter(out_dir, multiseed_summaries=ms or None)
     paths = reporter.generate()
     if paths:
         print(f"\n  {len(paths)} file bar chart tersimpan.")
@@ -734,7 +917,9 @@ def _run_comparison_bar_report(out_dir) -> None:
 
 
 def _run_combined_history_report(out_dir) -> None:
-    reporter = CombinedHistoryReporter(out_dir)
+    ms_drive = _load_multiseed_summary("drive")
+    seeds    = _seeds_from_summary(ms_drive)
+    reporter = CombinedHistoryReporter(out_dir, seeds=seeds or None)
     path = reporter.generate()
     if path:
         print(f"\n  File tersimpan: {path}")
@@ -761,8 +946,62 @@ def _run_computational_time_report(out_dir) -> None:
     print("  [3] Scatter Plot — Epochs vs F1 Score")
     print("\n  Analisis (1) dan (3) tidak memerlukan GPU.")
     print("  Analisis (2) memerlukan GPU; pastikan sesi Colab terhubung ke GPU.\n")
-    reporter = ComputationalTimeReporter(out_dir)
+    ms         = _load_multiseed_summaries()
+    ms_drive   = ms.get("drive")
+    seeds      = _seeds_from_summary(ms_drive)
+    reporter   = ComputationalTimeReporter(
+        out_dir,
+        multiseed_summaries=ms or None,
+        seeds=seeds or None,
+    )
     paths = reporter.generate()
+    if paths:
+        print(f"\n  {len(paths)} file tersimpan di: {out_dir}")
+    input("\n  Tekan Enter untuk kembali...")
+
+
+def _run_multiseed_report(cfg, out_dir) -> None:
+    from src.reporting.multiseed_reporter import _REQUIRED_SEEDS
+    print("\n  Multi-Seed Analysis & Statistical Significance")
+    print("  Memuat hasil evaluasi per seed, menghitung mean ± SD,")
+    print("  dan menjalankan uji Wilcoxon signed-rank (per-image, 5-seed averaged).\n")
+    print(f"  Required seeds: {_REQUIRED_SEEDS}")
+    print("  Prerequisite: Evaluasi sudah dijalankan untuk SEMUA seed dan loss function.")
+    print(f"  Contoh file: bce_mcc_seed42_results.json\n")
+
+    # Confirm seeds (default to required seeds)
+    raw = input(
+        f"  Seeds [{' '.join(str(s) for s in _REQUIRED_SEEDS)}]: "
+    ).strip()
+    if raw:
+        seeds = []
+        for s in raw.split():
+            try:
+                seeds.append(int(s))
+            except ValueError:
+                pass
+        if not seeds:
+            print("  [ERROR] Tidak ada seed valid.")
+            input("  Tekan Enter...")
+            return
+    else:
+        seeds = _REQUIRED_SEEDS
+    print(f"  Seeds yang digunakan: {seeds}")
+
+    # Save to dataset-specific subdir so DRIVE/STARE don't overwrite each other
+    ds_out_dir = out_dir / cfg.name.lower()
+    try:
+        reporter = MultiSeedReporter(cfg, ds_out_dir, seeds)
+        paths = reporter.generate()
+    except FileNotFoundError as e:
+        print(str(e))
+        input("\n  Tekan Enter untuk kembali...")
+        return
+    except ValueError as e:
+        print(f"\n  [ERROR] {e}")
+        input("\n  Tekan Enter untuk kembali...")
+        return
+
     if paths:
         print(f"\n  {len(paths)} file tersimpan di: {out_dir}")
     input("\n  Tekan Enter untuk kembali...")
@@ -770,8 +1009,16 @@ def _run_computational_time_report(out_dir) -> None:
 
 def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
     print("\n  Generating semua reports...\n")
+
+    ms         = _load_multiseed_summaries()
+    ms_cfg     = _load_multiseed_summary(cfg.name.lower())
+    seeds      = _seeds_from_summary(ms_cfg)
+
     _run_env_report(base / "section_4_1_environment")
-    HistoryReporter(cfg, trainer, base / "section_4_4_history").generate_all()
+    HistoryReporter(
+        cfg, trainer, base / "section_4_4_history",
+        seeds=seeds or None,
+    ).generate_all()
 
     x_test, y_test, masks, _ = _load_test_data(cfg)
     if x_test is not None:
@@ -781,8 +1028,22 @@ def _run_all_reports(cfg, trainer: ModelTrainer, base) -> None:
         if vis_paths:
             print(f"  {len(vis_paths)} file visualisasi tersimpan.")
 
-    ComparisonReporter(base / "section_4_6_comparison").generate_all(cfg.name.lower())
-    CombinedHistoryReporter(base / "section_4_7_combined_history").generate()
+    ComparisonReporter(
+        base / "section_4_6_comparison",
+        multiseed_summary=ms_cfg,
+    ).generate_all(cfg.name.lower())
+    ComparisonReporterEN(
+        base / "section_4_6b_comparison_en",
+        multiseed_summaries=ms or None,
+    ).generate()
+    ComparisonBarReporter(
+        base / "section_4_6c_comparison_bar",
+        multiseed_summaries=ms or None,
+    ).generate()
+    CombinedHistoryReporter(
+        base / "section_4_7_combined_history",
+        seeds=seeds or None,
+    ).generate()
     print(f"\n  Semua reports tersimpan di: {base}")
     input("\n  Tekan Enter untuk kembali...")
 

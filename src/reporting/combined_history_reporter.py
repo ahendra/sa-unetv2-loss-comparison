@@ -1,6 +1,8 @@
 import json
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, List, Optional
+
+import numpy as np
 
 from config import LOSS_FUNCTIONS, RESULTS_DIR
 
@@ -20,10 +22,6 @@ _DATASETS = [("drive", "DRIVE"), ("stare", "STARE")]
 _FIG_W_IN = 184 / 25.4   # 7.244 in
 _FIG_H_IN = 3.80         # 2 subplot rows + legend row
 
-# Fixed x-axis — same across all subplots for fair epoch-count comparison.
-# Y-axis is auto-scaled per subplot: different loss functions operate on
-# fundamentally different value ranges (e.g. Focal ~0.01–0.14 vs BCE ~0.15–0.82)
-# so a shared y-range would hide entire curves or clip most of the data.
 _X_LIM   = (-2.0, 153.0)
 _X_TICKS = [0, 50, 100, 150]
 
@@ -35,24 +33,27 @@ _C_BEST  = "#7F8C8D"   # slate gray — best epoch marker
 class CombinedHistoryReporter:
     """Generate a single figure with 12 training curves: 6 loss functions × 2 datasets.
 
+    When *seeds* is provided, each subplot overlays all per-seed curves (thin,
+    alpha=0.18) plus a thick cross-seed mean with ±1 SD shading band.
+    Falls back to single-seed curves when seeds is None.
+
     Layout : 2 rows (DRIVE, STARE) × 6 columns (one per loss function),
              plus a shared legend row at the bottom.
     Output : 300 dpi PNG sized for full-width two-column A4 paper (184 mm wide).
-    Font   : Helvetica / Arial / sans-serif, 8 pt.
-    Scales : Fixed x-axis [0–150] for fair epoch comparison; y-axis auto-scaled
-             per subplot (loss value ranges differ fundamentally across functions).
-             Y-tick labels shown on col 0 only; x-tick labels on bottom row only.
-             Axis names moved to the legend row to free subplot area.
-    Note   : No figure-level title; add a numbered caption in the paper body.
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(
+        self,
+        output_dir: Path,
+        seeds: Optional[List[int]] = None,
+    ):
         self._out_dir = output_dir
+        self._seeds   = seeds or []
 
     # ── Public ───────────────────────────────────────────────────────────────
 
     def generate(self) -> Optional[Path]:
-        """Build and save combined_training_history.png. Returns path or None."""
+        """Build and save combined_training_history[_multiseed].png."""
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -60,12 +61,14 @@ class CombinedHistoryReporter:
             import matplotlib.gridspec as gridspec
             import matplotlib.ticker as ticker
             from matplotlib.lines import Line2D
+            from matplotlib.patches import Patch
         except ImportError:
             print("  [WARN] matplotlib tidak terinstall, skip plot.")
             return None
 
-        with matplotlib.rc_context():
-            plt.rcParams.update({
+        multiseed = bool(self._seeds)
+
+        with matplotlib.rc_context({
                 "font.family":        "sans-serif",
                 "font.sans-serif":    ["Helvetica", "Arial", "Helvetica Neue",
                                        "DejaVu Sans"],
@@ -81,7 +84,7 @@ class CombinedHistoryReporter:
                 "ytick.major.width":  0.6,
                 "xtick.major.size":   2.5,
                 "ytick.major.size":   2.5,
-            })
+            }):
 
             loss_keys = list(LOSS_FUNCTIONS.keys())   # 6
             n_cols    = len(loss_keys)
@@ -89,10 +92,6 @@ class CombinedHistoryReporter:
 
             fig = plt.figure(figsize=(_FIG_W_IN, _FIG_H_IN))
 
-            # 2 subplot rows + 1 legend row (0.32 relative height to hold 2
-            # lines of content: legend handles + axis-name description).
-            # Y-tick labels on col 0 only → wspace can be tight (0.12).
-            # No axis labels on subplots → left margin reduced to 0.062.
             gs = gridspec.GridSpec(
                 n_rows + 1, n_cols,
                 figure=fig,
@@ -110,19 +109,25 @@ class CombinedHistoryReporter:
 
             for row_idx, (ds_key, ds_label) in enumerate(_DATASETS):
                 for col_idx, loss_key in enumerate(loss_keys):
-                    ax      = axes[row_idx][col_idx]
-                    history = self._load_history(ds_key, loss_key)
+                    ax = axes[row_idx][col_idx]
 
-                    if history is None:
-                        ax.text(0.5, 0.5, "—", ha="center", va="center",
-                                transform=ax.transAxes, fontsize=11, color="#bbb")
+                    if multiseed:
+                        histories = self._load_histories_multiseed(ds_key, loss_key)
+                        if len(histories) >= 2:
+                            self._draw_curves_multiseed(ax, histories)
+                        elif len(histories) == 1:
+                            self._draw_curves(ax, histories[0])
+                        else:
+                            ax.text(0.5, 0.5, "—", ha="center", va="center",
+                                    transform=ax.transAxes, fontsize=11, color="#bbb")
                     else:
-                        self._draw_curves(ax, history)
+                        history = self._load_history(ds_key, loss_key)
+                        if history is None:
+                            ax.text(0.5, 0.5, "—", ha="center", va="center",
+                                    transform=ax.transAxes, fontsize=11, color="#bbb")
+                        else:
+                            self._draw_curves(ax, history)
 
-                    # ── Axis scales ───────────────────────────────────────────
-                    # X: fixed for all subplots (fair epoch comparison).
-                    # Y: auto-scaled per subplot inside _draw_curves(); here
-                    #    we only configure ticks and format after drawing.
                     ax.set_xlim(_X_LIM)
                     ax.set_xticks(_X_TICKS)
                     ax.yaxis.set_major_locator(ticker.MaxNLocator(4, prune="both"))
@@ -133,16 +138,12 @@ class CombinedHistoryReporter:
                         sp.set_linewidth(0.6)
                         sp.set_color("#888888")
 
-                    # Column header: top row only
                     if row_idx == 0:
                         ax.set_title(
                             _SHORT_LABELS.get(loss_key, loss_key),
                             pad=3, fontsize=8, fontweight="bold",
                         )
 
-
-
-                    # Dataset label inside subplot, upper-left box (col 0 only)
                     if col_idx == 0:
                         ax.text(
                             0.04, 0.96, ds_label,
@@ -159,31 +160,132 @@ class CombinedHistoryReporter:
             ax_leg = fig.add_subplot(gs[n_rows, :])
             ax_leg.axis("off")
 
-            # Upper part: line-style legend handles
-            ax_leg.legend(
-                handles=[
+            if multiseed:
+                n = len(self._seeds)
+                legend_handles = [
+                    Line2D([0], [0], color=_C_TRAIN, lw=1.6, ls="-",
+                           label=f"Train Mean (N={n})"),
+                    Patch(facecolor=_C_TRAIN, alpha=0.20, edgecolor="none",
+                          label="Train ±1 SD"),
+                    Line2D([0], [0], color=_C_VAL, lw=1.6, ls="-",
+                           label=f"Val Mean (N={n})"),
+                    Patch(facecolor=_C_VAL, alpha=0.20, edgecolor="none",
+                          label="Val ±1 SD"),
+                    Line2D([0], [0], color=_C_BEST, lw=1.0, ls=":",
+                           label="Best Mean Epoch"),
+                ]
+            else:
+                legend_handles = [
                     Line2D([0], [0], color=_C_TRAIN, lw=1.4, ls="-",
                            label="Training Loss"),
                     Line2D([0], [0], color=_C_VAL,   lw=1.4, ls="-",
                            label="Validation Loss"),
                     Line2D([0], [0], color=_C_BEST,  lw=1.0, ls=":",
                            label="Best Epoch"),
-                ],
+                ]
+
+            ax_leg.legend(
+                handles=legend_handles,
                 loc="upper center", bbox_to_anchor=(0.5, 1.02),
-                ncol=3, fontsize=7, framealpha=0.9,
+                ncol=len(legend_handles), fontsize=7, framealpha=0.9,
                 edgecolor="#cccccc",
                 handlelength=2.0, columnspacing=1.2,
             )
 
             self._out_dir.mkdir(parents=True, exist_ok=True)
-            path = self._out_dir / "combined_training_history.png"
+            fname = ("combined_training_history_multiseed.png"
+                     if multiseed else "combined_training_history.png")
+            path = self._out_dir / fname
             fig.savefig(str(path), dpi=300, bbox_inches="tight",
                         facecolor="white", edgecolor="none")
             plt.close(fig)
-            print(f"  Combined training history: {path}")
+            mode = f"multi-seed (N={len(self._seeds)})" if multiseed else "single-seed"
+            print(f"  Combined training history ({mode}): {path}")
             return path
 
-    # ── Private ──────────────────────────────────────────────────────────────
+    # ── Private: multi-seed ───────────────────────────────────────────────────
+
+    def _load_histories_multiseed(
+        self, dataset: str, loss_key: str
+    ) -> List[Dict]:
+        histories = []
+        for s in self._seeds:
+            p = (RESULTS_DIR / dataset / "history"
+                 / f"{loss_key}_seed{s}_history.json")
+            if p.exists():
+                with open(p) as f:
+                    histories.append(json.load(f))
+        return histories
+
+    def _draw_curves_multiseed(self, ax, histories: List[Dict]) -> None:
+        """Overlay per-seed thin curves + mean ± SD band on ax."""
+        train_lists = [h.get("loss", [])     for h in histories]
+        val_lists   = [h.get("val_loss", []) for h in histories]
+
+        min_t = min((len(t) for t in train_lists if t), default=0)
+        min_v = min((len(v) for v in val_lists   if v), default=0)
+        if min_t == 0 and min_v == 0:
+            return
+
+        ep_t = list(range(1, min_t + 1))
+        ep_v = list(range(1, min_v + 1))
+
+        train_arr = np.array([t[:min_t] for t in train_lists if len(t) >= min_t])
+        val_arr   = np.array([v[:min_v] for v in val_lists   if len(v) >= min_v])
+
+        m_train = train_arr.mean(axis=0) if len(train_arr) else np.array([])
+        s_train = (train_arr.std(axis=0, ddof=1)
+                   if len(train_arr) > 1 else np.zeros(min_t))
+        m_val   = val_arr.mean(axis=0)   if len(val_arr) else np.array([])
+        s_val   = (val_arr.std(axis=0, ddof=1)
+                   if len(val_arr) > 1 else np.zeros(min_v))
+
+        # Individual seed curves — very thin, semi-transparent
+        for t_curve in train_lists:
+            if len(t_curve) >= min_t:
+                ax.plot(ep_t, t_curve[:min_t],
+                        color=_C_TRAIN, alpha=0.18, lw=0.6)
+        for v_curve in val_lists:
+            if len(v_curve) >= min_v:
+                ax.plot(ep_v, v_curve[:min_v],
+                        color=_C_VAL, alpha=0.18, lw=0.6)
+
+        # Mean curves + SD band
+        if len(m_train):
+            ax.plot(ep_t, m_train, color=_C_TRAIN, lw=1.4, ls="-")
+            ax.fill_between(ep_t,
+                            m_train - s_train,
+                            m_train + s_train,
+                            alpha=0.14, color=_C_TRAIN)
+        if len(m_val):
+            ax.plot(ep_v, m_val, color=_C_VAL, lw=1.4, ls="-")
+            ax.fill_between(ep_v,
+                            m_val - s_val,
+                            m_val + s_val,
+                            alpha=0.14, color=_C_VAL)
+            best_ep  = int(np.argmin(m_val)) + 1
+            best_val = float(m_val.min())
+            ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
+            ax.text(
+                0.97, 0.50,
+                f"Best: {best_ep}\n(val={best_val:.5f})",
+                transform=ax.transAxes,
+                fontsize=6, ha="right", va="center",
+                color="#222222",
+                bbox=dict(boxstyle="square,pad=0.22",
+                          facecolor="white", edgecolor="#cccccc",
+                          alpha=0.90, linewidth=0.4),
+                zorder=6,
+            )
+
+        # Y-axis: zoom to mean-curve range
+        all_m = list(m_train) + list(m_val)
+        if all_m:
+            vmin, vmax = min(all_m), max(all_m)
+            span = max(vmax - vmin, 1e-6)
+            ax.set_ylim(max(0.0, vmin - span * 0.06), vmax + span * 0.06)
+
+    # ── Private: single-seed ──────────────────────────────────────────────────
 
     def _load_history(self, dataset: str, loss_key: str) -> Optional[Dict]:
         path = RESULTS_DIR / dataset / "history" / f"{loss_key}_history.json"
@@ -193,12 +295,6 @@ class CombinedHistoryReporter:
             return json.load(f)
 
     def _draw_curves(self, ax, history: dict) -> None:
-        """Plot train/val curves, best-epoch marker, and annotation.
-
-        Also sets the y-axis limits from the actual data so each loss function
-        is shown at its native scale (loss value ranges differ fundamentally
-        across functions and cannot share a meaningful common y-axis).
-        """
         train_loss = history.get("loss", [])
         val_loss   = history.get("val_loss", [])
         epochs     = list(range(1, len(train_loss) + 1))
@@ -206,7 +302,6 @@ class CombinedHistoryReporter:
         ax.plot(epochs, train_loss, color=_C_TRAIN, lw=1.2, ls="-")
         ax.plot(epochs, val_loss,   color=_C_VAL,   lw=1.2, ls="-")
 
-        # Auto y-range with 6 % padding above/below the data extent
         all_vals = [v for v in train_loss + val_loss if v == v]
         if all_vals:
             vmin, vmax = min(all_vals), max(all_vals)
@@ -217,14 +312,11 @@ class CombinedHistoryReporter:
             best_ep  = val_loss.index(min(val_loss)) + 1
             best_val = min(val_loss)
             ax.axvline(best_ep, color=_C_BEST, lw=0.9, ls=":")
-
-            # Best-epoch annotation — placed at vertical centre (0.50) to
-            # avoid overlap with the DRIVE/STARE label in the upper-left.
             ax.text(
                 0.97, 0.50,
                 f"Best epoch: {best_ep}\n(val_loss={best_val:.5f})",
                 transform=ax.transAxes,
-                fontsize=5, ha="right", va="center",
+                fontsize=6, ha="right", va="center",
                 color="#222222",
                 bbox=dict(boxstyle="square,pad=0.22",
                           facecolor="white", edgecolor="#cccccc",

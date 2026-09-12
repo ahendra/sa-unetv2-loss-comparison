@@ -1,6 +1,6 @@
 import json
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -32,19 +32,38 @@ _RC = {
 }
 
 
-class ComparisonBarReporter:
-    """Improved grouped bar chart comparison for journal publication.
+def _ms_extract(summary: Dict) -> Tuple[Dict, Dict, int]:
+    """Extract (vals, stds, n_seeds) from a multiseed summary dict."""
+    s = summary.get("summary", {})
+    vals = {lk: {m: info["mean"] for m, info in pm.items() if isinstance(info, dict)}
+            for lk, pm in s.items()}
+    stds = {lk: {m: info["std"]  for m, info in pm.items() if isinstance(info, dict)}
+            for lk, pm in s.items()}
+    n = summary.get("n_seeds", len(summary.get("seeds", [])))
+    return vals, stds, n
 
-    Generates bar_chart_drive.png and bar_chart_stare.png with:
-      - figsize 20 × 7.5·n_rows in
-      - Helvetica / Arial 12 pt throughout
-      - Value labels on bars at 12 pt
-      - Last chart row horizontally centred
-      - 300 DPI output
+
+class ComparisonBarReporter:
+    """Grouped bar chart comparison for journal publication.
+
+    When *multiseed_summaries* is provided, bar heights are per-loss means
+    across all seeds and black error bars show ±1 SD (N=5 seeds). Without
+    multiseed data, falls back to single-seed scalar values.
+
+    Parameters
+    ----------
+    output_dir         : directory for output PNG files
+    multiseed_summaries: optional {dataset_key: multiseed_summary_dict}
+                         loaded from multiseed_summary.json (MultiSeedReporter).
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(
+        self,
+        output_dir: Path,
+        multiseed_summaries: Optional[Dict[str, Dict]] = None,
+    ):
         self._out_dir = output_dir
+        self._ms      = multiseed_summaries or {}
 
     # ── Public ───────────────────────────────────────────────────────────────
 
@@ -52,17 +71,28 @@ class ComparisonBarReporter:
         """Generate bar charts for DRIVE and STARE. Returns list of saved paths."""
         paths: List[Path] = []
         for ds_key, ds_label in _DATASETS:
-            results = self._load_results(ds_key)
-            if not results:
+            vals, stds, n_seeds = self._resolve_data(ds_key)
+            if not vals:
                 print(f"  [WARN] Tidak ada hasil evaluasi untuk dataset '{ds_key}'.")
                 continue
             self._out_dir.mkdir(parents=True, exist_ok=True)
-            p = self._plot_bar(results, ds_key, ds_label)
+            p = self._plot_bar(vals, stds, n_seeds, ds_key, ds_label)
             if p:
                 paths.append(p)
         return paths
 
     # ── Private ──────────────────────────────────────────────────────────────
+
+    def _resolve_data(
+        self, dataset: str
+    ) -> Tuple[Dict, Optional[Dict], Optional[int]]:
+        """Return (vals, stds, n_seeds). stds/n_seeds are None for single-seed."""
+        ms = self._ms.get(dataset)
+        if ms:
+            vals, stds, n_seeds = _ms_extract(ms)
+            return vals, stds, n_seeds
+        vals = self._load_results(dataset)
+        return vals, None, None
 
     def _load_results(self, dataset: str) -> Dict:
         results = {}
@@ -74,7 +104,12 @@ class ComparisonBarReporter:
         return results
 
     def _plot_bar(
-        self, results: Dict, dataset: str, dataset_label: str
+        self,
+        results:     Dict,
+        stds:        Optional[Dict],
+        n_seeds:     Optional[int],
+        dataset:     str,
+        dataset_label: str,
     ) -> Optional[Path]:
         try:
             import matplotlib
@@ -90,6 +125,7 @@ class ComparisonBarReporter:
         loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
         n_losses    = len(loss_keys)
         colors      = [LOSS_COLORS.get(k, "#aaaaaa") for k in loss_keys]
+        multiseed   = stds is not None
 
         n_cols        = 3
         n_metrics     = len(metrics)
@@ -97,8 +133,11 @@ class ComparisonBarReporter:
         n_in_last_row = n_metrics - (n_rows - 1) * n_cols
         last_row_off  = (n_cols - n_in_last_row) // 2 if n_in_last_row < n_cols else 0
 
+        subtitle = (f"Mean ± SD  (N={n_seeds} seeds)"
+                    if multiseed else "Single-seed evaluation")
+
         with matplotlib.rc_context(_RC):
-            fig = plt.figure(figsize=(20, 7.5 * n_rows))
+            fig = plt.figure(figsize=(14, 5.5 * n_rows))
             fig.patch.set_facecolor("#ffffff")
 
             gs = gridspec.GridSpec(
@@ -111,11 +150,10 @@ class ComparisonBarReporter:
             )
 
             fig.suptitle(
-                f"Loss Function Comparison — {dataset_label}",
+                f"Loss Function Comparison — {dataset_label}\n{subtitle}",
                 fontsize=13, fontweight="bold",
             )
 
-            # Build axes — last row centred
             axes_list: List = []
             for m_idx in range(n_metrics):
                 row = m_idx // n_cols
@@ -130,27 +168,41 @@ class ComparisonBarReporter:
                 mlabel       = METRIC_LABELS.get(mkey, mkey.upper())
                 mcolor       = METRIC_COLORS.get(mkey, "#111111")
                 vals         = [results[k].get(mkey, 0) for k in loss_keys]
+                errs         = ([stds[k].get(mkey, 0) for k in loss_keys]
+                                if multiseed else None)
                 lower_better = mkey in _LOWER_IS_BETTER
 
-                v_min = min(vals)
-                v_max = max(vals)
-                span  = (v_max - v_min) if (v_max - v_min) > 1e-9 else 0.02
+                # Compute y range accounting for error bars
+                if errs:
+                    effective_max = max(v + e for v, e in zip(vals, errs))
+                    effective_min = min(v - e for v, e in zip(vals, errs))
+                else:
+                    effective_max = max(vals)
+                    effective_min = min(vals)
 
-                y_min = max(0.0, v_min - span * 0.4)
-                y_max = v_max + span * 0.6
+                span  = (effective_max - effective_min) if (effective_max - effective_min) > 1e-9 else 0.02
+                y_min = max(0.0, effective_min - span * 0.35)
+                y_max = effective_max + span * 0.65
                 if not lower_better:
                     y_max = min(100.0, y_max)
                 if (y_max - y_min) < 0.01:
-                    y_min = max(0.0, v_min - 0.05)
-                    y_max = v_max + 0.05
+                    y_min = max(0.0, effective_min - 0.05)
+                    y_max = effective_max + 0.05
                 label_offset = (y_max - y_min) * 0.02
 
                 for i, (k, color) in enumerate(zip(loss_keys, colors)):
-                    v = results[k].get(mkey, 0)
+                    v   = results[k].get(mkey, 0)
+                    err = errs[i] if errs else None
                     ax.bar(i, v, width=0.65, color=color, alpha=0.85,
                            edgecolor="white", label=loss_labels[i])
-                    ax.text(i, v + label_offset, f"{v:.2f}",
-                            ha="center", va="bottom", fontsize=12, rotation=45)
+                    if err is not None:
+                        ax.errorbar(i, v, yerr=err, fmt="none",
+                                    color="#333333", capsize=5, capthick=1.3,
+                                    lw=1.5, zorder=5)
+                    top = (v + err + label_offset) if err is not None else (v + label_offset)
+                    txt = f"{v:.2f}\n±{err:.2f}" if err is not None else f"{v:.2f}"
+                    ax.text(i, top, txt,
+                            ha="center", va="bottom", fontsize=10, rotation=0)
 
                 ax.set_xticks(range(n_losses))
                 ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=12)
@@ -175,5 +227,6 @@ class ComparisonBarReporter:
             fig.savefig(str(path), dpi=300, bbox_inches="tight",
                         facecolor="white", edgecolor="none")
             plt.close(fig)
-            print(f"  Bar chart ({dataset_label}): {path}")
+            mode = "multi-seed Mean±SD" if multiseed else "single-seed"
+            print(f"  Bar chart ({dataset_label}, {mode}): {path}")
             return path
