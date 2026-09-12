@@ -9,8 +9,9 @@ from sklearn.metrics import f1_score
 
 from config import DriveConfig, StareConfig, RESULTS_DIR, RANDOM_SEED, TRAIN_SEED
 
-# Early-stopping patience inside each trial (separate from main training)
-_TRIAL_PATIENCE = 10
+# Early-stopping patience inside each trial — matches main training (cfg.early_stop_patience = 20)
+# so that tuning conditions mirror the real training regime as closely as possible.
+_TRIAL_PATIENCE = 20
 
 # ── Parameter search spaces ───────────────────────────────────────────────────
 #
@@ -386,12 +387,19 @@ class LossTuner:
                           if t.state.name in ("COMPLETE", "PRUNED")
                           and t.number < trial.number) if study_ref else trial.number
         progress_cb = _ProgressCB(n_done + 1, n_total, self.n_epochs, pruning_cb)
+
+        from keras.callbacks import ReduceLROnPlateau
         model.fit(
             self.x_train, self.y_train,
             validation_data = (self.x_val, self.y_val),
             epochs          = self.n_epochs,
             batch_size      = self.cfg.batch_size,
             callbacks       = [
+                ReduceLROnPlateau(monitor='val_loss',
+                                  factor=0.5,
+                                  patience=self.cfg.reduce_lr_patience,
+                                  min_lr=self.cfg.reduce_lr_min,
+                                  verbose=0),
                 EarlyStopping(monitor='val_loss',
                               patience=_TRIAL_PATIENCE,
                               restore_best_weights=True,
@@ -450,6 +458,10 @@ class LossTuner:
         import optuna
         optuna.logging.set_verbosity(optuna.logging.WARNING)
 
+        # n_warmup_steps: 20% of epochs so pruning activates well before EarlyStopping
+        # can fire (patience=_TRIAL_PATIENCE). Formula 0.70 produced warmup=105 for
+        # 150-epoch trials, making the pruner unreachable for early-stopped trials.
+        _warmup = max(10, round(self.n_epochs * 0.20 / 5) * 5)
         study = optuna.create_study(
             study_name  = self.study_name,
             storage     = self.storage,
@@ -458,7 +470,7 @@ class LossTuner:
             sampler     = optuna.samplers.TPESampler(seed=RANDOM_SEED),
             pruner      = optuna.pruners.MedianPruner(
                 n_startup_trials = max(10, round(n_trials * 0.20)),
-                n_warmup_steps   = max(10, round(self.n_epochs * 0.70 / 5) * 5),
+                n_warmup_steps   = _warmup,
                 interval_steps   = 5,
             ),
         )
