@@ -108,8 +108,10 @@ class ModelEvaluator:
         y_test: Union[np.ndarray, List[np.ndarray]],
         masks: Optional[np.ndarray] = None,
         restore_fn=None,
+        seed_tag: str = "",
     ) -> Dict[str, float]:
-        print(f"\n  Running inference on {len(x_test_padded)} test images...")
+        tag_info = f" [{seed_tag}]" if seed_tag else ""
+        print(f"\n  Running inference on {len(x_test_padded)} test images{tag_info}...")
         t0 = time.perf_counter()
         y_pred_padded = model.predict(
             x_test_padded, batch_size=self.cfg.batch_size, verbose=0)
@@ -128,8 +130,9 @@ class ModelEvaluator:
                      else y_test)
 
         # Prepare prediction save directory
+        pred_subdir = f"{loss_name}_{seed_tag}" if seed_tag else loss_name
         pred_dir = (RESULTS_DIR / self.cfg.name.lower()
-                    / "predictions" / loss_name)
+                    / "predictions" / pred_subdir)
         pred_dir.mkdir(parents=True, exist_ok=True)
 
         per_image: List[Dict] = []
@@ -170,6 +173,7 @@ class ModelEvaluator:
             try:
                 m = _compute_metrics(gt_masked, bin_masked, prob_masked,
                                      gt_2d_masked, pred_bin_2d_masked)
+                m["image_id"] = f"img_{i+1:03d}"
                 per_image.append(m)
             except Exception as e:
                 print(f"  [WARN] Could not compute metrics for image {i}: {e}")
@@ -185,11 +189,12 @@ class ModelEvaluator:
             raise RuntimeError(
                 "No valid metrics computed. Check dataset paths and labels.")
 
-        _count_keys = {"tp_count", "tn_count", "fp_count", "fn_count"}
+        _count_keys  = {"tp_count", "tn_count", "fp_count", "fn_count"}
+        _skip_avg    = _count_keys | {"image_id"}
         avg = {
             key: float(np.mean([m[key] for m in per_image]))
             for key in per_image[0]
-            if key not in _count_keys
+            if key not in _skip_avg
         }
         # Pixel counts are summed (not averaged) across all test images
         for k in _count_keys:
@@ -198,26 +203,26 @@ class ModelEvaluator:
         avg["inference_time_sec"] = round(elapsed, 4)
         avg["num_images"] = len(per_image)
 
-        self._save_results(loss_name, avg, per_image)
+        self._save_results(loss_name, avg, per_image, seed_tag)
         self._print_results(loss_name, avg)
         print(f"  Prediction images → {pred_dir}")
         return avg
 
     # ── Persistence ──────────────────────────────────────────────────────────
 
-    def load_results(self, loss_name: str) -> Optional[Dict]:
-        path = self._result_path(loss_name)
+    def load_results(self, loss_name: str, seed_tag: str = "") -> Optional[Dict]:
+        path = self._result_path(loss_name, seed_tag)
         if not path.exists():
             return None
         with open(path) as f:
             return json.load(f)
 
-    def results_exist(self, loss_name: str) -> bool:
-        return self._result_path(loss_name).exists()
+    def results_exist(self, loss_name: str, seed_tag: str = "") -> bool:
+        return self._result_path(loss_name, seed_tag).exists()
 
     def _save_results(self, loss_name: str, metrics: Dict,
-                      per_image: List[Dict] = None) -> None:
-        path = self._result_path(loss_name)
+                      per_image: List[Dict] = None, seed_tag: str = "") -> None:
+        path = self._result_path(loss_name, seed_tag)
         path.parent.mkdir(parents=True, exist_ok=True)
         # Keys stored as-is (not converted to percentage)
         _raw_keys = {"inference_time_sec", "num_images",
@@ -235,10 +240,11 @@ class ModelEvaluator:
         if per_image:
             pct["per_image_metrics"] = [
                 {
-                    k: (round(m[k] * 100, 4) if k in _wilcoxon_overlap else round(m[k], 4))
-                    for k in _wilcoxon_keys if k in m
+                    "image_id": m.get("image_id", f"img_{idx+1:03d}"),
+                    **{k: (round(m[k] * 100, 4) if k in _wilcoxon_overlap else round(m[k], 4))
+                       for k in _wilcoxon_keys if k in m},
                 }
-                for m in per_image
+                for idx, m in enumerate(per_image)
             ]
         with open(path, 'w') as f:
             json.dump(pct, f, indent=2)
@@ -267,6 +273,7 @@ class ModelEvaluator:
                     val = metrics[key] * 100 if metrics[key] <= 1.0 else metrics[key]
                     print(f"    {lbl:<28}: {val:.2f}%")
 
-    def _result_path(self, loss_name: str) -> Path:
+    def _result_path(self, loss_name: str, seed_tag: str = "") -> Path:
+        tag = f"_{seed_tag}" if seed_tag else ""
         return (RESULTS_DIR / self.cfg.name.lower()
-                / f"{loss_name}_results.json")
+                / f"{loss_name}{tag}_results.json")

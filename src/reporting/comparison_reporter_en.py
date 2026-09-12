@@ -40,8 +40,21 @@ _FIG_W_IN = 184 / 25.4   # 7.244 in
 _FIG_H_IN = 5.5           # inches — provides clearance for all 10 spoke labels
 
 
+def _ms_extract(summary: Dict):
+    """Extract (vals_dict, n_seeds) from multiseed summary dict."""
+    s = summary.get("summary", {})
+    vals = {lk: {m: info["mean"] for m, info in pm.items() if isinstance(info, dict)}
+            for lk, pm in s.items()}
+    n = summary.get("n_seeds", len(summary.get("seeds", [])))
+    return vals, n
+
+
 class ComparisonReporterEN:
     """Combined DRIVE + STARE radar chart in English for journal publication.
+
+    When *multiseed_summaries* is provided, radar values are per-loss means
+    across all seeds (mean ± SD cannot be shown directly on polar axes, but
+    the chart title and note indicate multi-seed averages).
 
     Layout : single figure — DRIVE radar (left) + STARE radar (right),
              shared legend below.
@@ -50,10 +63,19 @@ class ComparisonReporterEN:
              radial tick labels 6 pt, legend 7 pt.
     DPI    : 300.
     Output : radar_chart_combined_en.png
+
+    Parameters
+    ----------
+    multiseed_summaries : optional {dataset_key: multiseed_summary_dict}
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(
+        self,
+        output_dir: Path,
+        multiseed_summaries: Optional[Dict[str, Dict]] = None,
+    ):
         self._out_dir = output_dir
+        self._ms      = multiseed_summaries or {}
 
     # ── Public ───────────────────────────────────────────────────────────────
 
@@ -69,6 +91,12 @@ class ComparisonReporterEN:
             return None
 
         all_results = {ds: self._load_results(ds) for ds, _ in _DATASETS}
+        n_seeds_map = {}
+        for ds, _ in _DATASETS:
+            if ds in self._ms:
+                vals, n = _ms_extract(self._ms[ds])
+                all_results[ds] = vals
+                n_seeds_map[ds] = n
         if not any(all_results.values()):
             print("  [WARN] Tidak ada hasil evaluasi untuk DRIVE maupun STARE.")
             return None
@@ -109,14 +137,16 @@ class ComparisonReporterEN:
             for col_idx, (ds_key, ds_label) in enumerate(_DATASETS):
                 ax = fig.add_subplot(gs[0, col_idx], projection="polar")
                 ax.set_facecolor("#f8f9fa")
-                ds_res = all_results[ds_key]
+                ds_res  = all_results[ds_key]
+                n_seeds = n_seeds_map.get(ds_key)
                 if not ds_res:
                     ax.set_title(f"{ds_label}\n(no data available)",
                                  fontsize=9, fontweight="bold", pad=18)
                     continue
-                handles = self._draw_radar(ax, ds_res, ds_label)
+                title_suffix = (f"\n(Mean, N={n_seeds} seeds)" if n_seeds else "")
+                handles = self._draw_radar(ax, ds_res, ds_label + title_suffix)
                 if not legend_handles:
-                    legend_handles = handles   # use first non-empty dataset
+                    legend_handles = handles
 
             if legend_handles:
                 ax_leg.legend(

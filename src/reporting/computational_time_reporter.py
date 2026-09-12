@@ -20,6 +20,16 @@ _DATASETS = [("drive", DriveConfig), ("stare", StareConfig)]
 _DS_LABELS = {"drive": "DRIVE", "stare": "STARE"}
 _N_WARMUP  = 3
 
+
+def _ms_extract_f1(summary: Dict):
+    """Return {loss_key: (mean_f1, std_f1)} from multiseed summary dict."""
+    s = summary.get("summary", {})
+    out = {}
+    for lk, pm in s.items():
+        if isinstance(pm, dict) and "f1" in pm and isinstance(pm["f1"], dict):
+            out[lk] = (pm["f1"].get("mean", 0.0), pm["f1"].get("std", 0.0))
+    return out
+
 _RC = {
     "font.family":     "sans-serif",
     "font.sans-serif": ["Helvetica", "Arial", "Helvetica Neue", "DejaVu Sans"],
@@ -43,8 +53,15 @@ class ComputationalTimeReporter:
     3. Scatter Plot — Convergence Speed vs Segmentation Performance (F1).
     """
 
-    def __init__(self, output_dir: Path):
+    def __init__(
+        self,
+        output_dir: Path,
+        multiseed_summaries: Optional[Dict[str, Dict]] = None,
+        seeds: Optional[List[int]] = None,
+    ):
         self._out_dir = output_dir
+        self._ms      = multiseed_summaries or {}
+        self._seeds   = seeds or []
 
     # ── Public ────────────────────────────────────────────────────────────────
 
@@ -53,11 +70,12 @@ class ComputationalTimeReporter:
         paths: List[Path] = []
 
         print("\n  Memuat riwayat pelatihan dan hasil evaluasi...")
-        histories = self._load_all_histories()
-        results   = self._load_all_results()
+        histories           = self._load_all_histories()
+        histories_per_seed  = self._load_all_histories_multiseed() if self._seeds else {}
+        results             = self._load_all_results()
 
         print("\n  [1/3] Jumlah Epoch hingga Konvergensi...")
-        p1 = self._plot_epochs_convergence(histories)
+        p1 = self._plot_epochs_convergence(histories, histories_per_seed)
         if p1:
             paths.append(p1)
 
@@ -91,10 +109,35 @@ class ComputationalTimeReporter:
                     print(f"  [LEWATI] {ds_name}/{loss_key}_history.json tidak ditemukan")
         return histories
 
+    def _load_all_histories_multiseed(self) -> Dict:
+        """Load per-seed histories: {ds: {loss_key: [hist_seed42, hist_seed123, ...]}}"""
+        out: Dict = {}
+        for ds_name, _ in _DATASETS:
+            out[ds_name] = {}
+            for loss_key in LOSS_FUNCTIONS:
+                seed_hists = []
+                for s in self._seeds:
+                    p = (RESULTS_DIR / ds_name / "history"
+                         / f"{loss_key}_seed{s}_history.json")
+                    if p.exists():
+                        with open(p) as f:
+                            seed_hists.append(json.load(f))
+                if seed_hists:
+                    out[ds_name][loss_key] = seed_hists
+        return out
+
     def _load_all_results(self) -> Dict:
         results: Dict = {}
         for ds_name, _ in _DATASETS:
             results[ds_name] = {}
+            # Prefer multiseed mean F1 when available
+            ms = self._ms.get(ds_name)
+            if ms:
+                f1_map = _ms_extract_f1(ms)
+                for loss_key, (mean_f1, std_f1) in f1_map.items():
+                    results[ds_name][loss_key] = {
+                        "f1": mean_f1, "_f1_std": std_f1, "_multiseed": True}
+                continue
             for loss_key in LOSS_FUNCTIONS:
                 p = RESULTS_DIR / ds_name / f"{loss_key}_results.json"
                 if p.exists():
@@ -104,7 +147,9 @@ class ComputationalTimeReporter:
 
     # ── Analysis 1: Epochs to Convergence ────────────────────────────────────
 
-    def _plot_epochs_convergence(self, histories: Dict) -> Optional[Path]:
+    def _plot_epochs_convergence(
+        self, histories: Dict, histories_per_seed: Dict
+    ) -> Optional[Path]:
         try:
             import matplotlib
             matplotlib.use("Agg")
@@ -116,19 +161,39 @@ class ComputationalTimeReporter:
         loss_keys   = list(LOSS_FUNCTIONS.keys())
         loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
         ds_names    = [d for d, _ in _DATASETS]
+        multiseed   = bool(histories_per_seed)
 
-        epochs_data: Dict[str, List[int]] = {}
+        # For each (ds, loss): compute mean [and std] of epoch counts across seeds
+        epochs_mean: Dict[str, List[float]] = {}
+        epochs_std:  Dict[str, List[float]] = {}
         for ds_name in ds_names:
-            epochs_data[ds_name] = []
+            epochs_mean[ds_name] = []
+            epochs_std[ds_name]  = []
             for loss_key in loss_keys:
+                if multiseed:
+                    seed_hists = histories_per_seed.get(ds_name, {}).get(loss_key, [])
+                    if seed_hists:
+                        counts = [len(h.get("loss", [])) for h in seed_hists]
+                        epochs_mean[ds_name].append(float(np.mean(counts)))
+                        epochs_std[ds_name].append(
+                            float(np.std(counts, ddof=1)) if len(counts) > 1 else 0.0)
+                        continue
+                # Fallback to single-seed history
                 h = histories[ds_name].get(loss_key)
-                epochs_data[ds_name].append(len(h["loss"]) if h and "loss" in h else 0)
+                cnt = len(h["loss"]) if h and "loss" in h else 0
+                epochs_mean[ds_name].append(float(cnt))
+                epochs_std[ds_name].append(0.0)
 
-        all_vals = [v for ds in ds_names for v in epochs_data[ds]]
-        y_max    = (max(all_vals) if all_vals else 150) * 1.25
+        all_vals = [v for ds in ds_names for v in epochs_mean[ds]]
+        all_errs = [v for ds in ds_names for v in epochs_std[ds]]
+        y_max    = (max(v + e for v, e in zip(all_vals, all_errs))
+                    if all_vals else 150) * 1.25
+
+        subtitle = (f"Mean ± SD  (N={len(self._seeds)} seeds)" if multiseed
+                    else "Single-seed")
 
         with matplotlib.rc_context(_RC):
-            fig, ax = plt.subplots(figsize=(12, 5))
+            fig, ax = plt.subplots(figsize=(10, 5))
             fig.patch.set_facecolor("#ffffff")
 
             x       = np.arange(len(loss_keys))
@@ -137,21 +202,30 @@ class ComputationalTimeReporter:
             offsets = [-0.5 * width, 0.5 * width]
 
             for i, ds_name in enumerate(ds_names):
-                vals = epochs_data[ds_name]
-                bars = ax.bar(x + offsets[i], vals, width,
-                              label=_DS_LABELS[ds_name], color=colors[i],
-                              alpha=0.85, edgecolor="white")
-                for bar, v in zip(bars, vals):
-                    if v > 0:
+                means = epochs_mean[ds_name]
+                errs  = epochs_std[ds_name] if multiseed else None
+                bars  = ax.bar(
+                    x + offsets[i], means, width,
+                    label=_DS_LABELS[ds_name], color=colors[i],
+                    alpha=0.85, edgecolor="white",
+                    yerr=errs if errs else None,
+                    capsize=4 if errs else 0,
+                    error_kw={"elinewidth": 1.2, "ecolor": "#333333"},
+                )
+                for bar, m, e in zip(bars, means, (errs or [0.0]*len(means))):
+                    if m > 0:
+                        txt = f"{m:.0f}±{e:.0f}" if multiseed and e > 0 else f"{m:.0f}"
                         ax.text(bar.get_x() + bar.get_width() / 2,
-                                bar.get_height() + y_max * 0.01,
-                                str(v), ha="center", va="bottom", fontsize=9)
+                                bar.get_height() + (e or 0) + y_max * 0.01,
+                                txt, ha="center", va="bottom", fontsize=9)
 
             ax.set_xticks(x)
             ax.set_xticklabels(loss_labels, rotation=20, ha="right")
             ax.set_ylabel("Epochs to Convergence")
-            ax.set_title("Epochs to Convergence per Loss Function",
-                         fontweight="bold")
+            ax.set_title(
+                f"Epochs to Convergence per Loss Function\n{subtitle}",
+                fontweight="bold",
+            )
             ax.set_ylim(0, y_max)
             ax.legend()
             ax.grid(axis="y", alpha=0.3, linewidth=0.5)
@@ -387,6 +461,10 @@ class ComputationalTimeReporter:
                     fontweight="bold",
                 )
                 ax.set_ylim(y_min, y_max)
+                if y_min > 0:
+                    ax.annotate("Note: y-axis does not start at zero.",
+                                xy=(0.01, 0.02), xycoords="axes fraction",
+                                fontsize=7, color="gray", style="italic")
                 ax.grid(axis="y", alpha=0.3, linewidth=0.5)
 
                 plt.tight_layout()
@@ -684,10 +762,15 @@ class ComputationalTimeReporter:
                 for loss_key in loss_keys:
                     h = histories[ds_name].get(loss_key)
                     r = results[ds_name].get(loss_key)
-                    if not h or not r:
+                    if not r:
                         continue
-                    epochs = len(h.get("loss", []))
+                    # Epoch count: from single-seed history
+                    if h:
+                        epochs = len(h.get("loss", []))
+                    else:
+                        epochs = 0
                     f1     = r.get("f1")
+                    f1_std = r.get("_f1_std", 0.0)
                     if not epochs or f1 is None:
                         continue
                     short = (LOSS_FUNCTIONS[loss_key]
@@ -695,7 +778,7 @@ class ComputationalTimeReporter:
                              .replace(" Loss", "")
                              .strip())
                     color = LOSS_COLORS.get(loss_key, "#aaaaaa")
-                    points.append((epochs, f1, short, color))
+                    points.append((epochs, f1, short, color, f1_std))
 
                 fig, ax = plt.subplots(figsize=(8, 5))
                 fig.patch.set_facecolor("#ffffff")
@@ -705,23 +788,26 @@ class ComputationalTimeReporter:
                 )
 
                 if not points:
-                    ax.text(0.5, 0.5, "Data tidak tersedia",
+                    ax.text(0.5, 0.5, "No data available",
                             transform=ax.transAxes,
                             ha="center", va="center", color="gray", fontsize=11)
                 else:
-                    all_x = [p[0] for p in points]
-                    all_y = [p[1] for p in points]
+                    all_x  = [p[0] for p in points]
+                    all_y  = [p[1] for p in points]
+                    all_ye = [p[4] for p in points]  # f1_std (0 if single-seed)
                     x_min, x_max = min(all_x), max(all_x)
                     x_span   = max(x_max - x_min, 1)
-                    # Tambah margin kiri-kanan agar anotasi tidak terpotong tepi grafik
                     x_margin = x_span * 0.12
                     ax.set_xlim(x_min - x_margin, x_max + x_margin)
-                    x_threshold = x_min + x_span * 0.85  # titik di atas 85% rentang X
+                    x_threshold = x_min + x_span * 0.85
 
-                    for epochs, f1, short, color in points:
+                    for epochs, f1, short, color, f1_std in points:
                         ax.scatter(epochs, f1, s=90, color=color, zorder=5,
                                    edgecolors="white", linewidths=0.8)
-                        # Anotasi ke kanan jika masih ada ruang; ke kiri jika mendekati tepi
+                        if f1_std > 0:
+                            ax.errorbar(epochs, f1, yerr=f1_std, fmt="none",
+                                        color=color, capsize=4, capthick=1.0,
+                                        lw=1.2, zorder=4, alpha=0.7)
                         if epochs >= x_threshold:
                             ax.annotate(short, (epochs, f1),
                                         textcoords="offset points",
@@ -733,12 +819,16 @@ class ComputationalTimeReporter:
                                         xytext=(6, 4), ha="left",
                                         fontsize=9, color=color)
 
-                    y_span   = max(max(all_y) - min(all_y), 0.5)
+                    y_errs_max = [y + e for y, e in zip(all_y, all_ye)]
+                    y_errs_min = [y - e for y, e in zip(all_y, all_ye)]
+                    y_span   = max(max(y_errs_max) - min(y_errs_min), 0.5)
                     y_margin = y_span * 0.15
-                    ax.set_ylim(min(all_y) - y_margin, max(all_y) + y_margin)
+                    ax.set_ylim(min(y_errs_min) - y_margin, max(y_errs_max) + y_margin)
 
+                multiseed_ds = bool(self._ms.get(ds_name))
+                y_label      = ("F1 Score (%, Mean)" if multiseed_ds else "F1 Score (%)")
                 ax.set_xlabel("Epochs to Convergence")
-                ax.set_ylabel("F1 Score (%)")
+                ax.set_ylabel(y_label)
                 ax.grid(alpha=0.3, linewidth=0.5)
 
                 plt.tight_layout()

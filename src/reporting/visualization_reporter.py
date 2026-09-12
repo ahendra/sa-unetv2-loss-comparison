@@ -80,11 +80,11 @@ class VisualizationReporter:
 
     Rows 0–3 carry a red rectangle marking the zoom region.
 
-    Colour coding (Error Map):
-      TP = Green (#00B400) — vessel correctly detected
-      TN = White           — background correctly detected
-      FP = Red   (#DC0000) — background predicted as vessel
-      FN = Blue  (#0000DC) — vessel not detected
+    Colour coding (Error Map) — colorblind-safe palette (Wong 2011):
+      TP = Bluish-green (#009E73) — vessel correctly detected
+      TN = White                  — background correctly detected
+      FP = Orange       (#E69F00) — background predicted as vessel
+      FN = Blue         (#0072B2) — vessel not detected
 
     Parameters
     ----------
@@ -145,14 +145,15 @@ class VisualizationReporter:
         txt        = _LEGEND_TEXT[self._lang]
         row_labels = _ROW_LABELS[self._lang]
 
+        # Legend colors match the colorblind-safe error map palette (Wong 2011)
         legend_patches = [
-            Patch(facecolor=(  0/255, 180/255,   0/255), edgecolor="#888",
+            Patch(facecolor=(  0/255, 158/255, 115/255), edgecolor="#888",
                   label=txt["tp"]),
             Patch(facecolor="white",                     edgecolor="#888",
                   label=txt["tn"]),
-            Patch(facecolor=(220/255,   0/255,   0/255), edgecolor="#888",
+            Patch(facecolor=(230/255, 159/255,   0/255), edgecolor="#888",
                   label=txt["fp"]),
-            Patch(facecolor=(  0/255,   0/255, 220/255), edgecolor="#888",
+            Patch(facecolor=(  0/255, 114/255, 178/255), edgecolor="#888",
                   label=txt["fn"]),
         ]
 
@@ -186,7 +187,7 @@ class VisualizationReporter:
             col_label_h   = 0.28
             legend_h      = 0.46
             fig_w         = col_w * n_cols
-            _dpi          = 150
+            _dpi          = 300
             _legend_ncol  = 2
             _top          = 0.97
             _row_label_fs = 8
@@ -323,10 +324,12 @@ class VisualizationReporter:
                                 interpolation=cv2.INTER_NEAREST,
                             )
 
+                        # Colorblind-safe palette (Wong 2011):
+                        # TP=green, TN=white, FP=orange, FN=blue
                         err_map = np.full((*gt_bin.shape, 3), 255, dtype=np.uint8)
-                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 180,   0]  # TP green
-                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [220,   0,   0]  # FP red
-                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0,   0, 220]  # FN blue
+                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 158, 115]  # TP bluish-green
+                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [230, 159,   0]  # FP orange
+                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0, 114, 178]  # FN blue
                         ax.imshow(err_map)
                         _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
                     else:

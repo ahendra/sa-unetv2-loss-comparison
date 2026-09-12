@@ -480,7 +480,7 @@ class AblationReporter:
         )
 
         path = self._out_dir / "preprocessing_ablation.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        fig.savefig(str(path), dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"  Grafik tersimpan: {path}")
 
@@ -590,6 +590,6 @@ class AblationReporter:
 
         self._out_dir.mkdir(parents=True, exist_ok=True)
         path = self._out_dir / "preprocessing_sample_comparison.png"
-        fig.savefig(str(path), dpi=150, bbox_inches="tight")
+        fig.savefig(str(path), dpi=300, bbox_inches="tight")
         plt.close(fig)
         print(f"  Perbandingan sampel tersimpan: {path}")

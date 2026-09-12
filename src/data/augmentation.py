@@ -1,9 +1,8 @@
 import logging
 import os
 import random
-import shutil
 from pathlib import Path
-from typing import Callable, Dict, List, Tuple
+from typing import Callable, List, Tuple
 
 import cv2
 import numpy as np
@@ -93,17 +92,6 @@ AUG_OPS: List[Tuple[str, int, Callable]] = [
     ("hv",             1, DataAugmentation.hv_flip),
 ]
 
-# Validate sample counts per augmentation type (for 20 original train images → 260 total)
-VALIDATE_COUNTS: Dict[str, int] = {
-    "original":       2,
-    "h":              2,
-    "v":              2,
-    "hv":             2,
-    "randomColor":    6,
-    "randomGaussian": 6,
-    "randomRotation": 6,
-}
-
 
 # ── Runner ────────────────────────────────────────────────────────────────────
 
@@ -111,13 +99,18 @@ class RetinalAugmentationRunner:
     """
     Augments retinal vessel datasets (DRIVE / STARE) following SA-UNetV2 paper.
 
+    Split is performed at the ORIGINAL IMAGE level before augmentation to
+    prevent data leakage between training and validation sets.
+
     Per original image generates 12 augmented versions:
         randomRotation ×3, randomColor ×3, randomGaussian ×3,
         h-flip ×1, v-flip ×1, hv-flip ×1
+    Original images are also copied → 13 files per original image.
 
-    Original images are also copied. Final output is split proportionally:
-        - validate : 10% (2 original, 2h, 2v, 2hv, 6 randomColor, 6 randomGaussian, 6 randomRotation)
-        - train    : remaining 90%
+    Example with val_ratio=0.1 and 20 DRIVE training images:
+        - 2 originals reserved for validate → 2 × 13 = 26 files
+        - 18 originals reserved for train   → 18 × 13 = 234 files
+        (No augmented variant of a validate-original appears in train.)
 
     Output structure inside aug_base_dir:
         aug_base/
@@ -139,6 +132,7 @@ class RetinalAugmentationRunner:
         aug_base_dir: str,
         label_suffix_fn: Callable[[str], str],
         preprocessing_pipeline=None,
+        val_ratio: float = 0.1,
     ) -> None:
         """
         src_img_dir           : original training images directory
@@ -149,6 +143,8 @@ class RetinalAugmentationRunner:
                                  original image BEFORE augmentation so that all
                                  saved files already contain the preprocessed
                                  content (e.g. CLAHE-enhanced RGB).
+        val_ratio             : fraction of ORIGINAL images reserved for validate
+                                 (applied before augmentation; default 0.1 = 10%)
         """
 
         if RANDOM_SEED is not None:
@@ -156,7 +152,6 @@ class RetinalAugmentationRunner:
             np.random.seed(RANDOM_SEED)
 
         aug_base  = Path(aug_base_dir)
-        pool_base = aug_base / "_pool"
         train_img = aug_base / "train"    / "images"
         train_lbl = aug_base / "train"    / "labels"
         val_img   = aug_base / "validate" / "images"
@@ -165,101 +160,69 @@ class RetinalAugmentationRunner:
         for d in [train_img, train_lbl, val_img, val_lbl]:
             d.mkdir(parents=True, exist_ok=True)
 
-        for aug_type in VALIDATE_COUNTS:
-            (pool_base / aug_type / "images").mkdir(parents=True, exist_ok=True)
-            (pool_base / aug_type / "labels").mkdir(parents=True, exist_ok=True)
-
-        # ── Step 1: Generate augmented images into pool ───────────────────────
+        # ── Step 1: Collect & split original images ───────────────────────────
         img_files = sorted([
             f for f in os.listdir(src_img_dir)
             if not f.startswith('.') and os.path.isfile(os.path.join(src_img_dir, f))
         ])
 
-        reps_total = sum(r for _, r, _ in AUG_OPS)
-        n_orig = len(img_files)
-        n_total = n_orig * (reps_total + 1)
+        n_orig     = len(img_files)
+        n_val_orig = max(1, round(n_orig * val_ratio))
+        val_orig_indices   = set(random.sample(range(n_orig), n_val_orig))
+        train_orig_indices = set(range(n_orig)) - val_orig_indices
+
+        n_per_orig = sum(r for _, r, _ in AUG_OPS) + 1   # 12 augmented + 1 original
+        n_train_est = len(train_orig_indices) * n_per_orig
+        n_val_est   = len(val_orig_indices)   * n_per_orig
 
         _pre_desc = (preprocessing_pipeline.description
                      if preprocessing_pipeline is not None else "none (raw RGB)")
         print(f"\n  Sumber gambar        : {src_img_dir}")
         print(f"  Preprocessing        : {_pre_desc}")
+        print(f"  Seed                 : {RANDOM_SEED}")
         print(f"  Jumlah gambar asli   : {n_orig}")
-        print(f"  Augmentasi per gambar: {reps_total} + 1 (original) = {reps_total + 1}")
-        print(f"  Total estimasi       : {n_total} gambar\n")
+        print(f"  Split original       : {len(train_orig_indices)} train | "
+              f"{len(val_orig_indices)} validate  (split sebelum augmentasi)")
+        print(f"  Augmentasi per gambar: {n_per_orig - 1} + 1 (original) = {n_per_orig}")
+        print(f"  Total estimasi       : {n_train_est} train  +  {n_val_est} validate\n")
 
-        # Collect (img_pool_path, lbl_pool_path) per aug type for the split
-        type_pairs: Dict[str, List[Tuple[str, str]]] = {t: [] for t in VALIDATE_COUNTS}
+        # ── Step 2: Augment each subset directly into its output directory ─────
+        def _augment_subset(orig_indices: set, out_img: Path, out_lbl: Path,
+                            desc: str) -> int:
+            count = 0
+            for i in tqdm(sorted(orig_indices), desc=f"  {desc}", unit="gambar"):
+                img_fname = img_files[i]
+                lbl_fname = label_suffix_fn(img_fname)
+                lbl_path  = os.path.join(src_lbl_dir, lbl_fname)
 
-        for img_fname in tqdm(img_files, desc="  Augmentasi", unit="gambar"):
-            lbl_fname = label_suffix_fn(img_fname)
-            lbl_path  = os.path.join(src_lbl_dir, lbl_fname)
+                if not os.path.exists(lbl_path):
+                    logger.warning("Label tidak ditemukan: %s — dilewati.", lbl_path)
+                    continue
 
-            if not os.path.exists(lbl_path):
-                logger.warning("Label tidak ditemukan: %s — dilewati.", lbl_path)
-                continue
+                img = Image.open(os.path.join(src_img_dir, img_fname)).convert('RGB')
+                if preprocessing_pipeline is not None:
+                    img = Image.fromarray(preprocessing_pipeline.apply(np.array(img)))
+                lbl = Image.open(lbl_path).convert('L')
 
-            img = Image.open(os.path.join(src_img_dir, img_fname)).convert('RGB')
-            if preprocessing_pipeline is not None:
-                img = Image.fromarray(preprocessing_pipeline.apply(np.array(img)))
-            lbl = Image.open(lbl_path).convert('L')
+                # Save original as PNG (normalises format)
+                img.save(str(out_img / (os.path.splitext(img_fname)[0] + '.png')))
+                lbl.save(str(out_lbl / (os.path.splitext(lbl_fname)[0] + '.png')))
+                count += 1
 
-            # Convert original to PNG (normalizes format to match augmented outputs)
-            orig_img_fname = os.path.splitext(img_fname)[0] + '.png'
-            orig_lbl_fname = os.path.splitext(lbl_fname)[0] + '.png'
-            orig_img_dst = str(pool_base / "original" / "images" / orig_img_fname)
-            orig_lbl_dst = str(pool_base / "original" / "labels" / orig_lbl_fname)
-            img.save(orig_img_dst)
-            lbl.save(orig_lbl_dst)
-            type_pairs["original"].append((orig_img_dst, orig_lbl_dst))
+                # Generate and save augmented versions
+                for aug_type, reps, op in AUG_OPS:
+                    for j in range(reps):
+                        aug_img, aug_lbl = op(img.copy(), lbl.copy())
+                        aug_img.save(str(out_img / _aug_fname(aug_type, j, img_fname)))
+                        aug_lbl.save(str(out_lbl / _aug_fname(aug_type, j, lbl_fname)))
+                        count += 1
+            return count
 
-            # Generate and save augmented versions
-            for aug_type, reps, op in AUG_OPS:
-                for i in range(reps):
-                    aug_img, aug_lbl = op(img.copy(), lbl.copy())
-                    aug_img_fname = _aug_fname(aug_type, i, img_fname)
-                    aug_lbl_fname = _aug_fname(aug_type, i, lbl_fname)
-                    aug_img_dst   = str(pool_base / aug_type / "images" / aug_img_fname)
-                    aug_lbl_dst   = str(pool_base / aug_type / "labels" / aug_lbl_fname)
-                    aug_img.save(aug_img_dst)
-                    aug_lbl.save(aug_lbl_dst)
-                    type_pairs[aug_type].append((aug_img_dst, aug_lbl_dst))
-
-        # ── Step 2: Proportional random split ─────────────────────────────────
-        print("\n  Membagi data secara proporsional (train / validate)...\n")
-        train_pairs: List[Tuple[str, str]] = []
-        val_pairs:   List[Tuple[str, str]] = []
-
-        for aug_type, val_count in VALIDATE_COUNTS.items():
-            pairs    = type_pairs[aug_type]
-            n_val    = min(val_count, len(pairs))
-            val_idx  = set(random.sample(range(len(pairs)), n_val))
-
-            n_to_train = len(pairs) - n_val
-            print(f"  [{aug_type:>16}]  total={len(pairs):>3}  "
-                  f"validate={n_val:>2}  train={n_to_train:>3}")
-
-            for i, pair in enumerate(pairs):
-                if i in val_idx:
-                    val_pairs.append(pair)
-                else:
-                    train_pairs.append(pair)
-
-        print(f"\n  Train    : {len(train_pairs)} gambar")
-        print(f"  Validate : {len(val_pairs)} gambar")
-        print(f"  Total    : {len(train_pairs) + len(val_pairs)} gambar\n")
-
-        # ── Step 3: Copy to final train / validate directories ────────────────
-        for img_src, lbl_src in tqdm(train_pairs, desc="  Simpan train   ", unit="gambar"):
-            shutil.copy2(img_src, train_img / Path(img_src).name)
-            shutil.copy2(lbl_src, train_lbl / Path(lbl_src).name)
-
-        for img_src, lbl_src in tqdm(val_pairs, desc="  Simpan validate", unit="gambar"):
-            shutil.copy2(img_src, val_img / Path(img_src).name)
-            shutil.copy2(lbl_src, val_lbl / Path(lbl_src).name)
-
-        # ── Cleanup temporary pool ────────────────────────────────────────────
-        shutil.rmtree(pool_base)
+        n_train_actual = _augment_subset(train_orig_indices, train_img, train_lbl,
+                                         "Augmentasi train   ")
+        n_val_actual   = _augment_subset(val_orig_indices,   val_img,   val_lbl,
+                                         "Augmentasi validate")
 
         print(f"\n  Selesai!")
-        print(f"  Train    → {train_img}")
-        print(f"  Validate → {val_img}")
+        print(f"  Train    → {train_img}  ({n_train_actual} file)")
+        print(f"  Validate → {val_img}  ({n_val_actual} file)")

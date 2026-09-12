@@ -8,7 +8,19 @@ PREPROCESSING_MODES = ("rgb", "clahe", "green", "green_clahe")
 # Global random seed — set the same value before every training run so that
 # weight initialisation and data shuffle are identical across all loss functions.
 # Change to None to disable fixed seeding (non-reproducible).
-RANDOM_SEED: int = None
+import os as _os
+
+# Fixed seed — used for augmentation (original-image split) and Optuna TPE sampler.
+# Must NOT change between runs so that all runs use identical train/val data splits.
+RANDOM_SEED: int = 42
+
+# Training seed — used for model weight initialisation, batch shuffling, and dropout.
+# Override via environment variable to run multiple reproducible experiments:
+#   EXPERIMENT_SEED=0   python main.py
+#   EXPERIMENT_SEED=123 python main.py
+# Falls back to RANDOM_SEED when not set so a plain `python main.py` is still reproducible.
+_env_seed = _os.environ.get("EXPERIMENT_SEED")
+TRAIN_SEED: int = int(_env_seed) if _env_seed is not None else RANDOM_SEED
 
 
 BASE_DIR = Path(__file__).parent
