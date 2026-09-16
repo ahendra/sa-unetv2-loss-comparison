@@ -370,10 +370,11 @@ def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
 
     loss_fn = get_loss_function(loss_key)
 
-    # Training loop
-    val_losses_best: list = []
-    val_accs_best: list   = []
-    elapsed_list: list    = []
+    # Training loop — gunakan dict agar pairing seed→nilai selalu benar
+    # (append ke list bisa mismatch jika ada seed yang di-skip tanpa data)
+    seed_vl_map:  dict = {}   # seed → best val_loss
+    seed_va_map:  dict = {}   # seed → best val_acc pada epoch terbaik
+    seed_ela_map: dict = {}   # seed → elapsed_sec
 
     for seed in seeds:
         tag = f"seed{seed}"
@@ -381,8 +382,20 @@ def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
         print(f"  Run seed={seed}  →  tag={tag}")
         print('=' * 60)
 
-        if trainer.weights_exist(loss_key, seed_tag=tag):
-            ans = input(f"  Bobot '{tag}' sudah ada. Latih ulang? (y/n): ").strip().lower()
+        weights_ok = trainer.weights_exist(loss_key, seed_tag=tag)
+        history_ok = trainer.history_exists(loss_key, seed_tag=tag)
+
+        if weights_ok and not history_ok:
+            # Weights ada tapi history tidak → training sebelumnya terputus
+            print(f"  [PERINGATAN] Weights ada tapi history tidak ditemukan.")
+            print(f"  Training sebelumnya kemungkinan terputus (koneksi putus / Colab disconnect).")
+            print(f"  Bobot yang tersimpan hanya mencerminkan epoch yang sempat berjalan.")
+            ans = input(f"  Latih ulang dari awal? (y/n) [y]: ").strip().lower()
+            if ans == 'n':
+                print("  Dilewati — bobot mungkin tidak optimal (training tidak selesai).")
+                continue
+        elif weights_ok and history_ok:
+            ans = input(f"  Bobot '{tag}' sudah ada (training selesai). Latih ulang? (y/n): ").strip().lower()
             if ans != 'y':
                 print("  Dilewati — memuat history yang ada.")
                 hist = trainer.load_history(loss_key, seed_tag=tag)
@@ -390,11 +403,11 @@ def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
                     vl = hist.get("val_loss", [])
                     va = hist.get("val_accuracy", [])
                     if vl:
-                        val_losses_best.append(min(vl))
-                        best_ep = vl.index(min(vl))
+                        best_ep = int(np.argmin(vl))
+                        seed_vl_map[seed] = float(vl[best_ep])
                         if va and best_ep < len(va):
-                            val_accs_best.append(va[best_ep])
-                    elapsed_list.append(hist.get("elapsed_sec", 0.0))
+                            seed_va_map[seed] = float(va[best_ep])
+                    seed_ela_map[seed] = float(hist.get("elapsed_sec", 0.0))
                 continue
 
         trainer.train(loss_key, loss_fn, x_train, y_train, x_val, y_val,
@@ -405,33 +418,39 @@ def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
             vl = hist.get("val_loss", [])
             va = hist.get("val_accuracy", [])
             if vl:
-                val_losses_best.append(min(vl))
-                best_ep = vl.index(min(vl))
+                best_ep = int(np.argmin(vl))
+                seed_vl_map[seed] = float(vl[best_ep])
                 if va and best_ep < len(va):
-                    val_accs_best.append(va[best_ep])
-            elapsed_list.append(hist.get("elapsed_sec", 0.0))
+                    seed_va_map[seed] = float(va[best_ep])
+            seed_ela_map[seed] = float(hist.get("elapsed_sec", 0.0))
 
-    # Ringkasan mean ± SD
+    # ── Ringkasan mean ± SD ────────────────────────────────────────────────────
+    vl_vals  = list(seed_vl_map.values())
+    va_vals  = list(seed_va_map.values())
+    ela_vals = list(seed_ela_map.values())
+
     print(f"\n{'═' * 60}")
     print(f"  Ringkasan Multi-Seed: {loss_label} ({cfg.name})")
     print(f"{'═' * 60}")
     print(f"  Seeds     : {seeds}")
-    print(f"  Runs      : {len(val_losses_best)}/{len(seeds)}")
+    print(f"  Runs      : {len(vl_vals)}/{len(seeds)}")
 
-    if val_losses_best:
-        mean_vl = float(np.mean(val_losses_best))
-        std_vl  = float(np.std(val_losses_best))
+    if vl_vals:
+        mean_vl = float(np.mean(vl_vals))
+        std_vl  = float(np.std(vl_vals, ddof=1)) if len(vl_vals) > 1 else 0.0
         print(f"\n  Best Val Loss  : {mean_vl:.5f} ± {std_vl:.5f}")
-        for seed, vl in zip(seeds, val_losses_best):
-            print(f"    seed={seed:<6}: {vl:.5f}")
+        for seed in seeds:
+            vl = seed_vl_map.get(seed)
+            status = f"{vl:.5f}" if vl is not None else "— (tidak selesai)"
+            print(f"    seed={seed:<6}: {status}")
 
-    if val_accs_best:
-        mean_va = float(np.mean(val_accs_best))
-        std_va  = float(np.std(val_accs_best))
+    if va_vals:
+        mean_va = float(np.mean(va_vals))
+        std_va  = float(np.std(va_vals, ddof=1)) if len(va_vals) > 1 else 0.0
         print(f"\n  Best Val Acc   : {mean_va:.4f} ± {std_va:.4f}")
 
-    if elapsed_list:
-        total = sum(elapsed_list)
+    if ela_vals:
+        total = sum(ela_vals)
         print(f"\n  Total waktu    : {total:.0f}s  ({total/60:.1f} menit)")
 
     print(f"\n  Bobot tersimpan di:")
@@ -448,6 +467,145 @@ def _multi_seed_train_menu(trainer: ModelTrainer, cfg) -> None:
     input("\n  Tekan Enter untuk kembali...")
 
 
+def _multi_seed_train_all(trainer: ModelTrainer, cfg) -> None:
+    """Train semua fungsi loss dengan beberapa seed — satu invokasi tanpa interupsi manual."""
+    _header(f"Multi-Seed Experiment — Semua Loss — {cfg.name}")
+    print("  Training semua fungsi loss secara berurutan dengan seeds yang sama.")
+    print("  Bobot disimpan per seed (misal: bce_mcc_seed42.weights.h5).")
+    print("  Jika weights sudah ada untuk seed tertentu, run tersebut dilewati otomatis.\n")
+
+    # ── Input seeds ────────────────────────────────────────────────────────────
+    print("  Contoh: 42 123 456 789 2026")
+    raw = input("  Masukkan seeds (pisahkan spasi): ").strip()
+    seeds = []
+    for tok in raw.split():
+        try:
+            seeds.append(int(tok))
+        except ValueError:
+            pass
+    if not seeds:
+        print("  [ERROR] Tidak ada seed valid. Kembali.")
+        input("  Tekan Enter...")
+        return
+
+    n_loss  = len(LOSS_FUNCTIONS)
+    n_seeds = len(seeds)
+    print(f"\n  Seeds      : {seeds}")
+    print(f"  Loss       : {n_loss} fungsi (semua)")
+    print(f"  Total runs : {n_seeds * n_loss}")
+    confirm = input("  Mulai? (y/n): ").strip().lower()
+    if confirm != 'y':
+        return
+
+    # ── Muat data sekali ───────────────────────────────────────────────────────
+    x_train, y_train, x_val, y_val = _load_training_data(cfg)
+    if x_train is None:
+        return
+
+    # Skeleton pre-computation dilakukan sekali sebelum skel_recall
+    skel_ready              = False
+    y_train_skel: Optional[np.ndarray] = None
+    y_val_skel:   Optional[np.ndarray] = None
+
+    # Kumpulkan statistik untuk ringkasan akhir
+    summary: dict = {}
+
+    # ── Loop semua loss ────────────────────────────────────────────────────────
+    for loss_idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
+        print(f"\n{'═' * 60}")
+        print(f"  [{loss_idx + 1}/{n_loss}] {loss_label}")
+        print(f"{'═' * 60}")
+
+        _y_train, _y_val = y_train, y_val
+        if loss_key == "skel_recall":
+            if not skel_ready:
+                if not _ensure_skel_dir(cfg):
+                    print("  [ERROR] Skeleton generation gagal. Loss ini dilewati.")
+                    summary[loss_key] = {"label": loss_label, "n_done": 0,
+                                         "val_loss": [], "elapsed": []}
+                    continue
+                y_train_skel, y_val_skel = _stack_skeleton(cfg, y_train, y_val)
+                skel_ready = True
+            _y_train, _y_val = y_train_skel, y_val_skel
+
+        loss_fn = get_loss_function(loss_key)
+        val_losses_best: list = []
+        elapsed_list:    list = []
+
+        # ── Loop semua seed ────────────────────────────────────────────────────
+        for seed in seeds:
+            tag = f"seed{seed}"
+            print(f"\n  {'─' * 40}")
+            print(f"  seed={seed}  →  {loss_key}_{tag}")
+
+            weights_ok = trainer.weights_exist(loss_key, seed_tag=tag)
+            history_ok = trainer.history_exists(loss_key, seed_tag=tag)
+
+            if weights_ok and history_ok:
+                # Training selesai normal — aman untuk dilewati
+                print(f"  Selesai (weights + history ada) — dilewati otomatis.")
+                hist = trainer.load_history(loss_key, seed_tag=tag)
+                if hist:
+                    vl = hist.get("val_loss", [])
+                    if vl:
+                        val_losses_best.append(min(vl))
+                    elapsed_list.append(hist.get("elapsed_sec", 0.0))
+                continue
+
+            if weights_ok and not history_ok:
+                # Weights ada tapi history tidak → training terputus sebelum selesai
+                # Bobot hanya mencerminkan epoch yang sempat berjalan (tidak lengkap)
+                print(f"  [PERINGATAN] Weights ada tapi history tidak ditemukan.")
+                print(f"  Training sebelumnya kemungkinan terputus sebelum selesai.")
+                print(f"  Melatih ulang dari awal — weights lama akan ditimpa.")
+
+            trainer.train(loss_key, loss_fn, x_train, _y_train, x_val, _y_val,
+                          seed=seed, seed_tag=tag)
+
+            hist = trainer.load_history(loss_key, seed_tag=tag)
+            if hist:
+                vl = hist.get("val_loss", [])
+                if vl:
+                    val_losses_best.append(min(vl))
+                elapsed_list.append(hist.get("elapsed_sec", 0.0))
+
+        summary[loss_key] = {
+            "label":    loss_label,
+            "n_done":   len(val_losses_best),
+            "val_loss": val_losses_best,
+            "elapsed":  elapsed_list,
+        }
+
+    # ── Ringkasan akhir ────────────────────────────────────────────────────────
+    print(f"\n{'═' * 70}")
+    print(f"  RINGKASAN MULTI-SEED SEMUA LOSS — {cfg.name}")
+    print(f"{'═' * 70}")
+    print(f"  {'Fungsi Loss':26s}  {'Runs':>8}  {'Best Val Loss (mean±SD)':>24}  {'Total Waktu':>12}")
+    print(f"  {'─' * 26}  {'─' * 8}  {'─' * 24}  {'─' * 12}")
+
+    for loss_key, info in summary.items():
+        vls  = info["val_loss"]
+        elps = info["elapsed"]
+
+        vl_str = (
+            f"{float(np.mean(vls)):.5f} ± "
+            f"{float(np.std(vls, ddof=1)) if len(vls) > 1 else 0.0:.5f}"
+            if vls else "—"
+        )
+        time_str = (
+            f"{sum(elps) / 60:.1f} min"
+            if elps else "—"
+        )
+        print(f"  {info['label'][:26]:26s}  "
+              f"{info['n_done']:>4}/{n_seeds:>3}  "
+              f"{vl_str:>24}  "
+              f"{time_str:>12}")
+
+    print(f"\n  Untuk mean ± SD metrik test (F1, AUC, dll):")
+    print(f"  → Jalankan Evaluasi via menu Evaluasi → masukkan seed tag (seed42, seed123, ...).")
+    input("\n  Tekan Enter untuk kembali...")
+
+
 def _loss_selection_menu(trainer: ModelTrainer, cfg) -> None:
     _header(f"Training Model — {cfg.name}")
     print("  Pilih fungsi loss:\n")
@@ -456,7 +614,8 @@ def _loss_selection_menu(trainer: ModelTrainer, cfg) -> None:
     options = (
         [f"{v}" for _, v in loss_items]
         + ["Semua Fungsi Loss (Train All)"]
-        + ["Multi-Seed Experiment (Mean ± SD)"]
+        + ["Multi-Seed Experiment — Satu Loss (Mean ± SD)"]
+        + ["Multi-Seed Experiment — Semua Loss (Mean ± SD)"]
     )
 
     choice = _prompt(options, back_label="Kembali ke menu dataset")
@@ -466,6 +625,8 @@ def _loss_selection_menu(trainer: ModelTrainer, cfg) -> None:
         _train_all(trainer, cfg)
     elif choice == len(loss_items) + 2:
         _multi_seed_train_menu(trainer, cfg)
+    elif choice == len(loss_items) + 3:
+        _multi_seed_train_all(trainer, cfg)
     else:
         key, label = loss_items[choice - 1]
         _train_single(trainer, cfg, key, label)

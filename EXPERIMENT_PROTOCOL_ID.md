@@ -422,17 +422,18 @@ Seed mengontrol inisialisasi bobot, shuffle batch, dan dropout — bukan split d
 
 **Total: 5 seeds × 7 loss × 2 dataset = 70 training run.**
 
-### Menu — Per fungsi loss, DRIVE (ulangi 7 kali)
+### Menu — Semua loss sekaligus, DRIVE (rekomendasi)
 
 ```
 [1] DRIVE → [2] Training Model
-  → [Multi-Seed Experiment (Mean ± SD)]
-  → Pilih fungsi loss
+  → [Multi-Seed Experiment — Semua Loss (Mean ± SD)]
   → Masukkan seeds: 42 123 456 789 2026
   → Konfirmasi: y
 ```
 
-Ulangi untuk setiap 7 fungsi loss dan untuk STARE.
+Ulangi untuk STARE. Satu invokasi menyelesaikan semua 7 fungsi loss × 5 seeds secara berurutan. Jika diinterupsi, jalankan ulang — run yang sudah memiliki weights dilewati otomatis tanpa konfirmasi.
+
+> **Alternatif (per fungsi loss):** Gunakan `[Multi-Seed Experiment — Satu Loss (Mean ± SD)]` jika ingin memilih loss tertentu saja.
 
 ### Output
 
