@@ -422,17 +422,18 @@ Seeds control weight initialization, batch shuffling, and dropout — not the da
 
 **Total: 5 seeds × 7 losses × 2 datasets = 70 training runs.**
 
-### Menu — Per loss function, DRIVE (repeat 7 times)
+### Menu — All losses at once, DRIVE (recommended)
 
 ```
 [1] DRIVE → [2] Training Model
-  → [Multi-Seed Experiment (Mean ± SD)]
-  → Select loss function
+  → [Multi-Seed Experiment — Semua Loss (Mean ± SD)]
   → Enter seeds: 42 123 456 789 2026
   → Confirm: y
 ```
 
-Repeat for each of the 7 loss functions and for STARE.
+Repeat for STARE. One invocation runs all 7 loss functions × 5 seeds sequentially. If interrupted, restart — runs with existing weights are skipped automatically without prompting.
+
+> **Alternative (per loss):** Use `[Multi-Seed Experiment — Satu Loss (Mean ± SD)]` to select a specific loss function only.
 
 ### Output
 
