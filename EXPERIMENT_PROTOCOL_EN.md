@@ -244,9 +244,11 @@ results/DRIVE/reports/section_4_2_ablation/
 |---|---|
 | Method | Optuna TPE + MedianPruner |
 | Objective | Maximize F1 Score on validation set |
-| Trials per loss | 30 |
-| Epochs per trial | 50 |
+| Trials per loss | **50** |
+| Epochs per trial | **150** (matches `cfg.epochs` in main training) |
 | Resume | SQLite DB — safe to interrupt and continue |
+
+> **Why 50 trials and 150 epochs per trial?** These values are chosen so that the hyperparameter tuning conditions **closely mirror the main training regime**. Equal epochs per trial (150) give each loss function the same learning budget as real training. EarlyStopping (patience=20) and ReduceLROnPlateau are active inside every trial, reflecting actual training behaviour. The MedianPruner activates after 20% of epochs (≈30-epoch warmup) to prune clearly under-performing trials early, keeping 50 trials computationally practical.
 
 ### Search space per loss function
 
@@ -271,8 +273,8 @@ results/DRIVE/reports/section_4_2_ablation/
 ```
 [1] DRIVE → [4] Hyperparameter Tuning
   → [Tuning Semua Fungsi Loss]
-  → Number of trials: 30
-  → Epochs per trial: 50
+  → Number of trials: 50
+  → Epochs per trial: 150
 ```
 
 Repeat for STARE. If interrupted, restart and choose **resume** to continue from the last completed trial.
@@ -543,7 +545,7 @@ Reads from the existing SQLite DB — does not rerun tuning.
 | § 4.6c | Bar chart comparison DRIVE + STARE (journal format) |
 | § 4.7 | Combined training history DRIVE + STARE (2×6 grid) |
 | § 4.8 | Hyperparameter tuning charts per loss function |
-| § 4.9 | Computational time analysis (epochs, benchmark, scatter) |
+| § 4.9 | Computational time: (1) epochs to convergence mean ± SD · (2) **total training time mean ± SD per loss function** · (3) per-step benchmark · (4) scatter epochs vs F1 |
 | § 4.10 | Multi-seed analysis + Wilcoxon significance test |
 
 ---
@@ -581,6 +583,12 @@ sa_unetv2_loss_comparison/
 │   │       ├── section_4_7_combined_history/
 │   │       ├── section_4_8_tuning_plots/
 │   │       ├── section_4_9_computational_time/
+│   │       │   ├── epochs_convergence.png         ← [1/4] epochs to convergence mean±SD
+│   │       │   ├── training_time.png              ← [2/4] bar chart total training time
+│   │       │   ├── training_time.json             ← [2/4] numeric data (min, mean/SD/n)
+│   │       │   ├── training_time_results.xlsx     ← [2/4] table ready for thesis copy-paste
+│   │       │   ├── scatter_{drive,stare}.png      ← [3/4] scatter epochs vs F1
+│   │       │   └── benchmark_results.{json,xlsx}  ← [4/4] per-step timing (ms)
 │   │       └── section_4_10_multiseed/drive/
 │   │           └── multiseed_summary.json         ← REQUIRED before other reports
 │   └── stare/                                     ← identical structure
