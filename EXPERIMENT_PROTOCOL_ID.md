@@ -244,9 +244,11 @@ results/DRIVE/reports/section_4_2_ablation/
 |---|---|
 | Metode | Optuna TPE + MedianPruner |
 | Objective | Maksimalkan F1 Score (val set) |
-| Trials per loss | 30 |
-| Epochs per trial | 50 |
+| Trials per loss | **50** |
+| Epochs per trial | **150** (sama dengan `cfg.epochs` training utama) |
 | Resume | SQLite DB — aman diinterupsi dan dilanjutkan |
+
+> **Mengapa 50 trials dan 150 epoch per trial?** Nilai ini dipilih agar kondisi hyperparameter tuning **mendekati kondisi training utama** sedekat mungkin. Epoch per trial yang sama (150) memberikan ruang belajar yang setara sehingga fungsi loss dapat menunjukkan performa sebenarnya di setiap trial. EarlyStopping (patience=20) dan ReduceLROnPlateau aktif di dalam setiap trial, mencerminkan perilaku training utama. MedianPruner aktif setelah 20% epoch (≈30 epoch warmup) untuk memangkas trial yang jelas underperform lebih awal, sehingga 50 trial tetap praktis secara komputasi.
 
 ### Search space per fungsi loss
 
@@ -271,8 +273,8 @@ results/DRIVE/reports/section_4_2_ablation/
 ```
 [1] DRIVE → [4] Hyperparameter Tuning
   → [Tuning Semua Fungsi Loss]
-  → Jumlah trials: 30
-  → Epochs per trial: 50
+  → Jumlah trials: 50
+  → Epochs per trial: 150
 ```
 
 Ulangi untuk STARE. Jika diinterupsi, jalankan ulang dan pilih **resume** untuk melanjutkan dari trial terakhir.
@@ -543,7 +545,7 @@ Membaca ulang dari SQLite DB yang ada — tidak melakukan tuning ulang.
 | § 4.6c | Bar chart comparison DRIVE + STARE (journal format) |
 | § 4.7 | Combined training history DRIVE + STARE (2×6 grid) |
 | § 4.8 | Hyperparameter tuning charts per loss function |
-| § 4.9 | Computational time analysis (epochs, benchmark, scatter) |
+| § 4.9 | Computational time: (1) epochs to convergence mean ± SD · (2) **total training time mean ± SD per fungsi loss** · (3) per-step benchmark · (4) scatter epochs vs F1 |
 | § 4.10 | Multi-seed analysis + Wilcoxon significance test |
 
 ---
@@ -581,6 +583,12 @@ sa_unetv2_loss_comparison/
 │   │       ├── section_4_7_combined_history/
 │   │       ├── section_4_8_tuning_plots/
 │   │       ├── section_4_9_computational_time/
+│   │       │   ├── epochs_convergence.png         ← [1/4] epochs hingga konvergensi mean±SD
+│   │       │   ├── training_time.png              ← [2/4] bar chart total waktu training
+│   │       │   ├── training_time.json             ← [2/4] data numerik (menit, mean/SD/n)
+│   │       │   ├── training_time_results.xlsx     ← [2/4] tabel siap copy-paste ke tesis
+│   │       │   ├── scatter_{drive,stare}.png      ← [3/4] scatter epochs vs F1
+│   │       │   └── benchmark_results.{json,xlsx}  ← [4/4] per-step timing (ms)
 │   │       └── section_4_10_multiseed/drive/
 │   │           └── multiseed_summary.json         ← WAJIB ada sebelum report lain
 │   └── stare/                                     ← struktur identik

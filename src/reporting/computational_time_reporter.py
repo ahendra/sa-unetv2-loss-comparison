@@ -74,15 +74,27 @@ class ComputationalTimeReporter:
         histories_per_seed  = self._load_all_histories_multiseed() if self._seeds else {}
         results             = self._load_all_results()
 
-        print("\n  [1/3] Jumlah Epoch hingga Konvergensi...")
+        print("\n  [1/4] Jumlah Epoch hingga Konvergensi...")
         p1 = self._plot_epochs_convergence(histories, histories_per_seed)
         if p1:
             paths.append(p1)
 
-        print("\n  [3/3] Scatter: Epochs vs F1...")
+        print("\n  [2/4] Waktu Training Total (dari riwayat per-seed)...")
+        elapsed_stats = self._collect_elapsed_stats()
+        if any(elapsed_stats.get(ds) for ds, _ in _DATASETS):
+            self._print_training_time_summary(elapsed_stats)
+            pt = self._plot_training_time(elapsed_stats)
+            if pt:
+                paths.append(pt)
+            self._save_training_time_json(elapsed_stats)
+            self._save_training_time_excel(elapsed_stats)
+        else:
+            print("  [LEWATI] Tidak ada file riwayat dengan elapsed_sec yang ditemukan.")
+
+        print("\n  [3/4] Scatter: Epochs vs F1...")
         paths.extend(self._plot_scatter_epochs_f1(histories, results))
 
-        print("\n  [2/3] Mikro-Benchmark Langkah Pelatihan...")
+        print("\n  [4/4] Mikro-Benchmark Langkah Pelatihan...")
         print("  (Data pelatihan aug_clahe/, arsitektur SA-UNetV2, gradien dihitung secara eksplisit)")
         bench = self._run_all_benchmarks()
         if bench:
@@ -238,7 +250,240 @@ class ComputationalTimeReporter:
             print(f"  Tersimpan: {path.name}")
         return path
 
-    # ── Analysis 2: Micro-benchmark ───────────────────────────────────────────
+    # ── Analysis 2: Total Training Time ──────────────────────────────────────
+
+    def _collect_elapsed_stats(self) -> Dict:
+        """Read elapsed_sec from per-seed history JSONs and compute mean ± SD in minutes.
+
+        Uses per-seed files (loss_seed42_history.json) when seeds are provided,
+        falls back to the single-seed file (loss_history.json) otherwise.
+        Returns {ds_name: {loss_key: {mean_min, std_min, n_seeds, raw_min}}}.
+        """
+        out: Dict = {}
+        for ds_name, _ in _DATASETS:
+            out[ds_name] = {}
+            for loss_key in LOSS_FUNCTIONS:
+                raw_min: List[float] = []
+
+                if self._seeds:
+                    for seed_val in self._seeds:
+                        p = (RESULTS_DIR / ds_name / "history"
+                             / f"{loss_key}_seed{seed_val}_history.json")
+                        if p.exists():
+                            with open(p) as f:
+                                h = json.load(f)
+                            v = h.get("elapsed_sec")
+                            if v is not None:
+                                raw_min.append(float(v) / 60.0)
+
+                # Fallback to single-seed history
+                if not raw_min:
+                    p = RESULTS_DIR / ds_name / "history" / f"{loss_key}_history.json"
+                    if p.exists():
+                        with open(p) as f:
+                            h = json.load(f)
+                        v = h.get("elapsed_sec")
+                        if v is not None:
+                            raw_min.append(float(v) / 60.0)
+
+                if not raw_min:
+                    continue
+                n = len(raw_min)
+                out[ds_name][loss_key] = {
+                    "mean_min": float(np.mean(raw_min)),
+                    "std_min":  float(np.std(raw_min, ddof=1)) if n > 1 else 0.0,
+                    "n_seeds":  n,
+                    "raw_min":  raw_min,
+                }
+        return out
+
+    def _print_training_time_summary(self, stats: Dict) -> None:
+        print("\n  ── Ringkasan Waktu Training Total ──")
+        ds_avail = [d for d, _ in _DATASETS if stats.get(d)]
+        header = f"  {'Fungsi Loss':22s}"
+        for ds_name in ds_avail:
+            header += f"  {_DS_LABELS[ds_name]:>22s}"
+        print(header)
+        for loss_key, loss_label in LOSS_FUNCTIONS.items():
+            row = f"  {loss_label[:22]:22s}"
+            for ds_name in ds_avail:
+                entry = stats.get(ds_name, {}).get(loss_key)
+                if entry:
+                    n, m, s = entry["n_seeds"], entry["mean_min"], entry["std_min"]
+                    row += (f"  {m:>7.1f} ± {s:>5.1f} min"
+                            if n > 1 else f"  {m:>7.1f} min (n=1) ")
+                else:
+                    row += f"  {'—':>22s}"
+            print(row)
+
+    def _plot_training_time(self, stats: Dict) -> Optional[Path]:
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+        except ImportError:
+            print("  [PERINGATAN] matplotlib tidak terpasang, grafik dilewati.")
+            return None
+
+        loss_keys   = list(LOSS_FUNCTIONS.keys())
+        loss_labels = [LOSS_FUNCTIONS[k].replace(" (Baseline)", "") for k in loss_keys]
+        ds_names    = [d for d, _ in _DATASETS if stats.get(d)]
+        if not ds_names:
+            return None
+
+        n_seeds_max = max(
+            (stats[ds].get(lk, {}).get("n_seeds", 1)
+             for ds in ds_names for lk in loss_keys
+             if lk in stats.get(ds, {})),
+            default=1,
+        )
+        multiseed = n_seeds_max > 1
+        subtitle  = (f"Mean ± SD  (N={n_seeds_max} seeds)" if multiseed
+                     else "Single-seed")
+
+        means_by_ds: Dict[str, List[float]] = {}
+        stds_by_ds:  Dict[str, List[float]] = {}
+        for ds_name in ds_names:
+            means_by_ds[ds_name] = []
+            stds_by_ds[ds_name]  = []
+            for lk in loss_keys:
+                entry = stats[ds_name].get(lk)
+                means_by_ds[ds_name].append(entry["mean_min"] if entry else 0.0)
+                stds_by_ds[ds_name].append(
+                    entry["std_min"] if (entry and multiseed) else 0.0)
+
+        all_vals = [v for ds in ds_names for v in means_by_ds[ds]]
+        all_errs = [v for ds in ds_names for v in stds_by_ds[ds]]
+        y_max    = (max(v + e for v, e in zip(all_vals, all_errs))
+                    if all_vals else 60) * 1.25
+
+        colors  = ["#4E7EC5", "#E8825A"]
+        width   = 0.35
+        offsets = [-0.5 * width, 0.5 * width]
+
+        with matplotlib.rc_context(_RC):
+            fig, ax = plt.subplots(figsize=(10, 5))
+            fig.patch.set_facecolor("#ffffff")
+
+            x = np.arange(len(loss_keys))
+            for i, ds_name in enumerate(ds_names):
+                means = means_by_ds[ds_name]
+                errs  = stds_by_ds[ds_name] if multiseed else None
+                bars  = ax.bar(
+                    x + offsets[i], means, width,
+                    label=_DS_LABELS[ds_name], color=colors[i % len(colors)],
+                    alpha=0.85, edgecolor="white",
+                    yerr=errs if errs else None,
+                    capsize=4 if errs else 0,
+                    error_kw={"elinewidth": 1.2, "ecolor": "#333333"},
+                )
+                for bar, m, e in zip(bars, means, (errs or [0.0] * len(means))):
+                    if m > 0:
+                        txt = f"{m:.1f}±{e:.1f}" if (multiseed and e > 0) else f"{m:.1f}"
+                        ax.text(
+                            bar.get_x() + bar.get_width() / 2,
+                            bar.get_height() + (e or 0) + y_max * 0.01,
+                            txt, ha="center", va="bottom", fontsize=9,
+                        )
+
+            ax.set_xticks(x)
+            ax.set_xticklabels(loss_labels, rotation=20, ha="right")
+            ax.set_ylabel("Training Time (minutes)")
+            ax.set_title(
+                f"Total Training Time per Loss Function\n{subtitle}",
+                fontweight="bold",
+            )
+            ax.set_ylim(0, y_max)
+            ax.legend()
+            ax.grid(axis="y", alpha=0.3, linewidth=0.5)
+
+            plt.tight_layout()
+            path = self._out_dir / "training_time.png"
+            fig.savefig(str(path), dpi=300, bbox_inches="tight",
+                        facecolor="white", edgecolor="none")
+            plt.close(fig)
+            print(f"  Tersimpan: {path.name}")
+        return path
+
+    def _save_training_time_json(self, stats: Dict) -> None:
+        output: Dict = {"unit": "minutes", "results": {}}
+        for ds_name, ds_stats in stats.items():
+            if not ds_stats:
+                continue
+            output["results"][ds_name] = {}
+            for loss_key, entry in ds_stats.items():
+                output["results"][ds_name][loss_key] = {
+                    "mean_min": round(entry["mean_min"], 3),
+                    "std_min":  round(entry["std_min"],  3),
+                    "n_seeds":  entry["n_seeds"],
+                    "raw_min":  [round(v, 3) for v in entry["raw_min"]],
+                }
+        path = self._out_dir / "training_time.json"
+        with open(path, "w") as f:
+            json.dump(output, f, indent=2)
+        print(f"  JSON tersimpan: {path.name}")
+
+    def _save_training_time_excel(self, stats: Dict) -> None:
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, PatternFill, Alignment
+            from openpyxl.utils import get_column_letter
+        except ImportError:
+            print("  [PERINGATAN] openpyxl tidak terpasang, Excel dilewati. "
+                  "Pasang dengan: pip install openpyxl")
+            return
+
+        wb       = Workbook()
+        wb.remove(wb.active)
+        ws       = wb.create_sheet("Training Time")
+        hdr_font = Font(bold=True, color="FFFFFF")
+        hdr_fill = PatternFill(start_color="2176AE", end_color="2176AE",
+                               fill_type="solid")
+        bold_font = Font(bold=True)
+
+        ds_avail    = [d for d, _ in _DATASETS if stats.get(d)]
+        loss_keys   = list(LOSS_FUNCTIONS.keys())
+        loss_labels = [LOSS_FUNCTIONS[k] for k in loss_keys]
+
+        headers = ["Loss Function"]
+        for ds in ds_avail:
+            label = _DS_LABELS[ds]
+            headers += [f"{label} Mean (min)", f"{label} SD (min)", f"{label} N seeds"]
+        for c, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=c, value=h)
+            cell.font      = hdr_font
+            cell.fill      = hdr_fill
+            cell.alignment = Alignment(horizontal="center", wrap_text=True)
+
+        for r, (lk, ll) in enumerate(zip(loss_keys, loss_labels), 2):
+            ws.cell(row=r, column=1, value=ll)
+            col = 2
+            for ds in ds_avail:
+                entry = stats.get(ds, {}).get(lk)
+                if entry:
+                    ws.cell(row=r, column=col,     value=round(entry["mean_min"], 2))
+                    ws.cell(row=r, column=col + 1, value=round(entry["std_min"],  2))
+                    ws.cell(row=r, column=col + 2, value=entry["n_seeds"])
+                col += 3
+
+        note_row = len(loss_keys) + 3
+        ws.cell(row=note_row, column=1, value="Catatan").font = bold_font
+        ws.cell(row=note_row, column=2,
+                value=("Waktu diukur dari model.fit() saja "
+                       "(tidak termasuk build model dan loading data). "
+                       "Sumber: elapsed_sec di history JSON per seed."))
+
+        for col_cells in ws.columns:
+            width = max(len(str(c.value or "")) for c in col_cells)
+            ws.column_dimensions[
+                get_column_letter(col_cells[0].column)].width = min(width + 4, 32)
+        ws.row_dimensions[1].height = 32
+
+        path = self._out_dir / "training_time_results.xlsx"
+        wb.save(str(path))
+        print(f"  Excel tersimpan: {path.name}")
+
+    # ── Analysis 3 (was 2): Micro-benchmark ──────────────────────────────────
 
     def _load_loss_params_for_dataset(self, ds_name: str, loss_key: str) -> dict:
         """Return optimal hyperparameters for (dataset, loss_key).
