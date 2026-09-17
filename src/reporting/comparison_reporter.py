@@ -370,6 +370,15 @@ class ComparisonReporter:
         _CELL_KEY = [["TN", "FP"],   # Actual = Background
                      ["FN", "TP"]]   # Actual = Vessel
 
+        with matplotlib.rc_context(_RC):
+            fig, axes = plt.subplots(
+                n_rows, n_cols,
+                figsize=(n_cols * 3.8, n_rows * 4.2),
+                squeeze=False,
+            )
+            fig.patch.set_facecolor("#ffffff")
+            axes_flat = np.array(axes).flatten()
+
         for idx, (loss_key, label) in enumerate(zip(loss_keys, loss_labels)):
             ax = axes_flat[idx]
             m  = results[loss_key]

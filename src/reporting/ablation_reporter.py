@@ -417,6 +417,7 @@ class AblationReporter:
             n_rows, n_cols,
             figsize=(16, 4.5 * n_rows),
             gridspec_kw={"hspace": 0.60, "wspace": 0.38},
+            squeeze=False,
         )
         fig.suptitle(
             "Preprocessing Ablation Study — DRIVE (BCE+MCC, baseline)",
