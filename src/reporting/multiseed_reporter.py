@@ -14,8 +14,12 @@ Output files
 ------------
   1. multiseed_summary.json     — mean ± SD per loss × metric (N seeds)
   2. per_image_averaged.json    — 5-seed averaged per-image values per loss
-  3. pairwise_wilcoxon.json     — all 15 pairs per metric, Holm-corrected
-  4. pairwise_wilcoxon.csv      — manuscript-friendly CSV
+  3. pairwise_wilcoxon.json     — all pairs per metric, Holm-corrected (full data)
+  4. pairwise_wilcoxon.csv      — manuscript-friendly CSV (full data)
+  5. significance_wtl.txt/csv   — Win-Tie-Loss summary table per loss function
+  6. significance_matrix.png    — colour-coded 7×7 significance matrix (F1, AUC, Sens, clDice)
+  7. significant_pairs.txt      — compact list of only Holm-significant pairs + effect size
+  8. boxplot_{metric}.png       — per-metric seed-distribution boxplots
 
 Statistical design
 ------------------
@@ -69,6 +73,12 @@ _METRIC_LABELS = {
 
 _SIG_MARKERS = [(0.001, "***"), (0.01, "**"), (0.05, "*")]
 
+# Metrics shown in the compact significance matrix PNG (primary clinical metrics)
+_PRIMARY_VIZ_METRICS = ["f1", "auc", "sensitivity", "cldice"]
+
+# Effect-size thresholds for rank-biserial r_rb (Kerby 2014)
+_EFFECT_CATS = [(0.50, "Large"), (0.30, "Medium"), (0.10, "Small"), (0.00, "Negligible")]
+
 
 def _sig_marker(p: Optional[float]) -> str:
     if p is None:
@@ -77,6 +87,14 @@ def _sig_marker(p: Optional[float]) -> str:
         if p < threshold:
             return marker
     return "ns"
+
+
+def _effect_label(r_rb: float) -> str:
+    """Kerby (2014) effect-size category for matched-pairs rank-biserial r_rb."""
+    for thresh, label in _EFFECT_CATS:
+        if abs(r_rb) >= thresh:
+            return label
+    return "Negligible"
 
 
 def _holm_correction(p_values: List[float]) -> List[float]:
@@ -198,6 +216,10 @@ class MultiSeedReporter:
 
         plot_paths = self._plot_boxplots(summary)
         paths.extend(plot_paths)
+
+        print(f"\n  ── Compact Significance Reports ──")
+        sig_paths = self._generate_compact_significance(pairwise)
+        paths.extend(sig_paths)
 
         return paths
 
@@ -663,3 +685,387 @@ class MultiSeedReporter:
             print(f"  Boxplot: {fname.name}")
 
         return paths
+
+    # ── Compact significance reports ──────────────────────────────────────────
+
+    def _generate_compact_significance(self, pairwise: Dict) -> List[Path]:
+        """Master method: WTL table, significance matrix PNG, significant pairs list.
+
+        These three outputs present the same Wilcoxon results from pairwise_wilcoxon.json
+        in formats suited for quick reading and manuscript inclusion.
+        """
+        paths: List[Path] = []
+
+        # STARE N<10 → testing was skipped; write a brief note instead
+        if "__skipped__" in pairwise:
+            skip = pairwise["__skipped__"]
+            p = self.out_dir / "significance_summary.txt"
+            p.write_text(
+                f"Statistical Significance Testing — {self.cfg.name}\n"
+                f"{'='*60}\n\n"
+                f"SKIPPED — insufficient sample size for valid inferential testing.\n"
+                f"Reason : {skip.get('reason', '')}\n\n"
+                f"Results for this dataset are DESCRIPTIVE ONLY.\n"
+                f"Consult multiseed_summary.json for mean ± SD values.\n\n"
+                f"Reference: Pratt (1959); Conover (1999) §4.2\n",
+                encoding="utf-8",
+            )
+            paths.append(p)
+            print(f"  [sig] Skipped note   : {p.name}")
+            return paths
+
+        p1, p2 = self._save_wtl_summary(pairwise)
+        paths += [p1, p2]
+        print(f"  [sig] WTL summary    : {p1.name}")
+        print(f"  [sig] WTL CSV        : {p2.name}")
+
+        p3 = self._save_significance_matrix_png(pairwise)
+        if p3:
+            paths.append(p3)
+            print(f"  [sig] Matrix PNG     : {p3.name}")
+
+        p4 = self._save_significant_pairs_txt(pairwise)
+        paths.append(p4)
+        print(f"  [sig] Sig. pairs TXT : {p4.name}")
+
+        return paths
+
+    # ── Win-Tie-Loss summary ──────────────────────────────────────────────────
+
+    def _save_wtl_summary(self, pairwise: Dict):
+        """Win-Tie-Loss table across all metrics.
+
+        For each loss function, counts how many pairwise comparisons (across all
+        metrics) it wins (significantly better), ties (not significant), or loses
+        (significantly worse) after Holm correction.
+
+        Returns (txt_path, csv_path).
+        """
+        loss_keys = list(LOSS_FUNCTIONS.keys())
+        n_rivals  = len(loss_keys) - 1
+
+        # wtl[loss_key] = [w, t, l]
+        wtl: Dict[str, List[int]] = {k: [0, 0, 0] for k in loss_keys}
+
+        for m in _ALL_METRICS:
+            mres = pairwise.get(m, {})
+            for v in mres.values():
+                if not isinstance(v, dict) or v.get("skipped"):
+                    continue
+                lA  = v.get("lossA", "")
+                lB  = v.get("lossB", "")
+                if lA not in wtl or lB not in wtl:
+                    continue
+                sig = v.get("significant_holm", False)
+                mod = v.get("mean_oriented_diff", 0.0)  # >0 → lossA better
+                if not sig:
+                    wtl[lA][1] += 1
+                    wtl[lB][1] += 1
+                elif mod > 0:
+                    wtl[lA][0] += 1   # lossA wins
+                    wtl[lB][2] += 1
+                else:
+                    wtl[lA][2] += 1
+                    wtl[lB][0] += 1   # lossB wins
+
+        # Sort rows by Net = W - L descending
+        sorted_keys = sorted(loss_keys,
+                             key=lambda k: wtl[k][0] - wtl[k][2],
+                             reverse=True)
+
+        total_per_loss = n_rivals * len(_ALL_METRICS)
+        col_loss = 26
+
+        hdr = (f"  {'Loss Function':<{col_loss}}  {'W':>5}  {'T':>5}  {'L':>5}  "
+               f"{'Net':>5}  {'W%':>6}")
+        sep = "  " + "─" * (col_loss + 33)
+
+        data_rows = []
+        for lk in sorted_keys:
+            w, t, l = wtl[lk]
+            net  = w - l
+            wpct = 100.0 * w / total_per_loss if total_per_loss > 0 else 0.0
+            data_rows.append(
+                f"  {LOSS_FUNCTIONS.get(lk, lk):<{col_loss}}  {w:>5}  {t:>5}  "
+                f"{l:>5}  {net:>+5}  {wpct:>5.1f}%"
+            )
+
+        legend = (
+            "W = significantly better  |  T = not significant  |  "
+            "L = significantly worse\n"
+            f"Net = W − L  |  W% = W / (W+T+L)  |  "
+            f"{total_per_loss} comparisons per loss "
+            f"({n_rivals} rivals × {len(_ALL_METRICS)} metrics)\n"
+            "Significance threshold: p_holm < 0.05  "
+            "(Holm 1979 step-down correction, per metric family)"
+        )
+
+        txt = (
+            f"Win-Tie-Loss Summary — {self.cfg.name}\n"
+            f"Pairwise Wilcoxon signed-rank | Holm-corrected | seeds: {self.seeds}\n"
+            f"{'='*72}\n\n"
+            f"{hdr}\n{sep}\n"
+            + "\n".join(data_rows)
+            + f"\n\n{legend}\n"
+        )
+
+        p_txt = self.out_dir / "significance_wtl.txt"
+        p_txt.write_text(txt, encoding="utf-8")
+
+        # CSV: loss_key, label, W, T, L, Net, W_pct
+        csv_rows = [["loss_key", "loss_label", "W", "T", "L", "Net", "W_pct"]]
+        for lk in sorted_keys:
+            w, t, l = wtl[lk]
+            net  = w - l
+            wpct = round(100.0 * w / total_per_loss, 1) if total_per_loss > 0 else 0.0
+            csv_rows.append([lk, LOSS_FUNCTIONS.get(lk, lk), w, t, l, net, wpct])
+
+        p_csv = self.out_dir / "significance_wtl.csv"
+        p_csv.write_text(
+            "\n".join(",".join(str(x) for x in r) for r in csv_rows),
+            encoding="utf-8",
+        )
+
+        return p_txt, p_csv
+
+    # ── Significance matrix PNG ───────────────────────────────────────────────
+
+    def _cell_decision(self, mres: Dict, loss_keys: List[str], i: int, j: int):
+        """Decision for matrix cell (row=i, col=j) relative to loss_keys ordering.
+
+        Returns (decision, sig_marker_str, r_rb) where
+        decision ∈ {"diag", "win", "loss", "tie", "skip"}.
+        "win"  = loss_keys[i] significantly better than loss_keys[j]
+        "loss" = loss_keys[i] significantly worse than loss_keys[j]
+        """
+        if i == j:
+            return "diag", "", 0.0
+
+        # Canonical pair order: itertools.combinations preserves list order,
+        # so smaller index is always lossA in the stored pair key.
+        if i < j:
+            pair_key = f"{loss_keys[i]}__vs__{loss_keys[j]}"
+            row_is_A = True
+        else:
+            pair_key = f"{loss_keys[j]}__vs__{loss_keys[i]}"
+            row_is_A = False  # row is lossB in this stored pair
+
+        v = mres.get(pair_key)
+        if not isinstance(v, dict) or v.get("skipped"):
+            return "skip", "", 0.0
+
+        sig  = v.get("significant_holm", False)
+        mod  = v.get("mean_oriented_diff", 0.0)  # >0 → lossA (in pair) better
+        r_rb = v.get("rank_biserial", 0.0)
+        p_h  = v.get("p_holm")
+
+        if not sig:
+            return "tie", "ns", r_rb
+
+        a_wins   = mod > 0
+        row_wins = a_wins if row_is_A else (not a_wins)
+        return ("win" if row_wins else "loss"), _sig_marker(p_h), r_rb
+
+    def _save_significance_matrix_png(self, pairwise: Dict) -> Optional[Path]:
+        """Colour-coded 7×7 significance matrix for primary metrics (F1, AUC, Sensitivity, clDice).
+
+        Green  = row loss significantly better than column loss (p_holm < 0.05).
+        Red    = row loss significantly worse.
+        Gray   = not significant.
+
+        This is the most compact visual for manuscript inclusion.
+        """
+        try:
+            import matplotlib
+            matplotlib.use("Agg")
+            import matplotlib.pyplot as plt
+            import matplotlib.patches as mpatches
+        except ImportError:
+            print("  [WARN] matplotlib not installed — skipping significance matrix PNG.")
+            return None
+
+        loss_keys = list(LOSS_FUNCTIONS.keys())
+        n = len(loss_keys)
+
+        # Abbreviated axis labels
+        short_labels = []
+        for lk in loss_keys:
+            lbl = LOSS_FUNCTIONS[lk]
+            short_labels.append(lbl[:9] if " " not in lbl else lbl.split()[0][:9])
+
+        _COLORS = {
+            "win":  "#27ae60",   # green
+            "loss": "#e74c3c",   # red
+            "tie":  "#d5d8dc",   # light grey
+            "diag": "#eaecee",   # diagonal
+            "skip": "#fdfefe",   # white (missing data)
+        }
+
+        n_panels = len(_PRIMARY_VIZ_METRICS)
+        fig, axes = plt.subplots(1, n_panels,
+                                 figsize=(4.6 * n_panels, 5.0),
+                                 squeeze=False)
+
+        for col_idx, metric in enumerate(_PRIMARY_VIZ_METRICS):
+            ax   = axes[0][col_idx]
+            mres = pairwise.get(metric, {})
+
+            for i in range(n):
+                for j in range(n):
+                    decision, marker, r_rb = self._cell_decision(mres, loss_keys, i, j)
+                    fc   = _COLORS.get(decision, "#ffffff")
+                    ypos = n - 1 - i   # row 0 at top
+
+                    ax.add_patch(plt.Rectangle(
+                        (j - 0.5, ypos - 0.5), 1, 1,
+                        facecolor=fc, edgecolor="#aab7b8", linewidth=0.5,
+                    ))
+
+                    if decision == "diag":
+                        ax.text(j, ypos, "—",
+                                ha="center", va="center", fontsize=9, color="#7f8c8d")
+                    elif decision in ("win", "loss"):
+                        txt_col = "#fdfefe"
+                        ax.text(j, ypos + 0.14, marker,
+                                ha="center", va="center",
+                                fontsize=9, fontweight="bold", color=txt_col)
+                        ax.text(j, ypos - 0.20, f"r={r_rb:+.2f}",
+                                ha="center", va="center", fontsize=6, color=txt_col)
+                    elif decision == "tie":
+                        ax.text(j, ypos, "ns",
+                                ha="center", va="center", fontsize=8, color="#5d6d7e")
+                    else:
+                        ax.text(j, ypos, "n/a",
+                                ha="center", va="center", fontsize=6.5, color="#aab7b8")
+
+            ax.set_xlim(-0.5, n - 0.5)
+            ax.set_ylim(-0.5, n - 0.5)
+            ax.set_xticks(range(n))
+            ax.set_yticks(range(n))
+            ax.set_xticklabels(short_labels, rotation=40, ha="right", fontsize=7.5)
+            ax.set_yticklabels(list(reversed(short_labels)), fontsize=7.5)
+            ax.set_title(_METRIC_LABELS.get(metric, metric),
+                         fontsize=10, fontweight="bold", pad=8)
+            if col_idx == 0:
+                ax.set_ylabel("Loss A  (row)", fontsize=8)
+            ax.set_xlabel("Loss B  (col)", fontsize=8)
+
+        legend_handles = [
+            mpatches.Patch(facecolor=_COLORS["win"],  edgecolor="#888",
+                           label="Row sig. better (p_holm < 0.05)"),
+            mpatches.Patch(facecolor=_COLORS["loss"], edgecolor="#888",
+                           label="Row sig. worse (p_holm < 0.05)"),
+            mpatches.Patch(facecolor=_COLORS["tie"],  edgecolor="#888",
+                           label="Not significant"),
+        ]
+        fig.legend(handles=legend_handles, loc="lower center", ncol=3,
+                   fontsize=8, bbox_to_anchor=(0.5, -0.01), framealpha=0.9)
+
+        fig.suptitle(
+            f"Pairwise Significance Matrix — {self.cfg.name}  "
+            f"(Wilcoxon signed-rank, Holm-corrected, {len(self.seeds)} seeds)\n"
+            f"Cell: significance marker (* p<0.05  ** p<0.01  *** p<0.001) "
+            f"+ rank-biserial rᵣᵥ",
+            fontsize=8.5, y=1.02,
+        )
+
+        plt.tight_layout(rect=[0, 0.07, 1, 1.0])
+
+        out_path = self.out_dir / "significance_matrix.png"
+        fig.savefig(str(out_path), dpi=200, bbox_inches="tight", facecolor="white")
+        plt.close(fig)
+        return out_path
+
+    # ── Significant pairs list ────────────────────────────────────────────────
+
+    def _save_significant_pairs_txt(self, pairwise: Dict) -> Path:
+        """Compact ranked list of only Holm-significant pairs.
+
+        Sorted by metric order (_ALL_METRICS), then by |r_rb| descending so the
+        strongest effects appear first within each metric group.
+        """
+        loss_keys     = list(LOSS_FUNCTIONS.keys())
+        n_pairs_total = (len(loss_keys) * (len(loss_keys) - 1) // 2) * len(_ALL_METRICS)
+
+        sig_rows = []
+        for m in _ALL_METRICS:
+            mres = pairwise.get(m, {})
+            for pk, v in mres.items():
+                if not isinstance(v, dict) or v.get("skipped"):
+                    continue
+                if not v.get("significant_holm", False):
+                    continue
+                mod  = v.get("mean_oriented_diff", 0.0)  # >0 → lossA better
+                r_rb = v.get("rank_biserial", 0.0)
+                sig_rows.append({
+                    "metric":  m,
+                    "winner":  v.get("lossA") if mod > 0 else v.get("lossB"),
+                    "loser":   v.get("lossB") if mod > 0 else v.get("lossA"),
+                    "W":       v.get("W", float("nan")),
+                    "p_holm":  v.get("p_holm"),
+                    "r_rb":    r_rb,
+                    "effect":  _effect_label(r_rb),
+                    "n_pairs": v.get("n_pairs", "?"),
+                })
+
+        metric_order = {m: i for i, m in enumerate(_ALL_METRICS)}
+        sig_rows.sort(key=lambda r: (metric_order.get(r["metric"], 99), -abs(r["r_rb"])))
+
+        CW = {"m": 18, "w": 24, "l": 24}  # column widths
+        hdr = (
+            f"  {'Metric':<{CW['m']}}  {'Winner':<{CW['w']}}  "
+            f"{'Loser':<{CW['l']}}  {'W':>7}  {'p_holm':>9}  "
+            f"{'r_rb':>6}  {'Effect':<12}  N"
+        )
+        sep = "  " + "─" * (CW["m"] + CW["w"] + CW["l"] + 44)
+
+        body: List[str] = []
+        if not sig_rows:
+            body.append(
+                "  No significant differences after Holm correction "
+                "(all p_holm ≥ 0.05)."
+            )
+        else:
+            body += [hdr, sep]
+            prev_metric = None
+            for r in sig_rows:
+                if r["metric"] != prev_metric and prev_metric is not None:
+                    body.append("")   # blank line between metric groups
+                prev_metric = r["metric"]
+
+                wlabel = LOSS_FUNCTIONS.get(r["winner"] or "", r["winner"] or "?")
+                llabel = LOSS_FUNCTIONS.get(r["loser"]  or "", r["loser"]  or "?")
+                W_val  = r["W"]
+                W_str  = f"{W_val:.1f}" if W_val == W_val else "?"  # NaN → "?"
+                p_str  = f"{r['p_holm']:.4f}" if r["p_holm"] is not None else "?"
+
+                body.append(
+                    f"  {_METRIC_LABELS.get(r['metric'], r['metric']):<{CW['m']}}  "
+                    f"{wlabel[:CW['w']]:<{CW['w']}}  "
+                    f"{llabel[:CW['l']]:<{CW['l']}}  "
+                    f"{W_str:>7}  {p_str:>9}  "
+                    f"{r['r_rb']:>+6.3f}  {r['effect']:<12}  {r['n_pairs']}"
+                )
+
+        footer = (
+            f"\n  Found: {len(sig_rows)} significant pair(s) / {n_pairs_total} tested\n"
+            f"\n  Effect size (|r_rb|): "
+            f"Large ≥ 0.50 | Medium ≥ 0.30 | Small ≥ 0.10 | Negligible < 0.10\n"
+            f"  Reference: Kerby (2014), Frontiers in Psychology.\n"
+            f"  Direction: Winner = loss with higher oriented mean "
+            f"(sign-corrected for lower-is-better metrics).\n"
+        )
+
+        txt = (
+            f"Significant Pairs Summary — {self.cfg.name}\n"
+            f"Wilcoxon signed-rank, two-sided | Holm-corrected (α = 0.05) | "
+            f"seeds: {self.seeds}\n"
+            f"Unit: per-image metrics averaged over {len(self.seeds)} seeds (R1)\n"
+            f"{'='*90}\n\n"
+            + "\n".join(body)
+            + footer
+        )
+
+        out_path = self.out_dir / "significant_pairs.txt"
+        out_path.write_text(txt, encoding="utf-8")
+        return out_path
