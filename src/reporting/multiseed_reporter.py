@@ -73,8 +73,14 @@ _METRIC_LABELS = {
 
 _SIG_MARKERS = [(0.001, "***"), (0.01, "**"), (0.05, "*")]
 
-# Metrics shown in the compact significance matrix PNG (primary clinical metrics)
-_PRIMARY_VIZ_METRICS = ["f1", "auc", "sensitivity", "cldice"]
+# Metrics shown in the significance matrix PNG — all 10, arranged in 2 rows
+# Row 0 (overlap): f1, auc, sensitivity, specificity, accuracy
+# Row 1 (topology+): mcc, jaccard, cldice, betti0_error, betti1_error
+_PRIMARY_VIZ_METRICS = [
+    "f1", "auc", "sensitivity", "specificity", "accuracy",
+    "mcc", "jaccard", "cldice", "betti0_error", "betti1_error",
+]
+_VIZ_LAYOUT = (2, 5)   # (n_rows, n_cols) for the matrix PNG
 
 # Effect-size thresholds for rank-biserial r_rb (Kerby 2014)
 _EFFECT_CATS = [(0.50, "Large"), (0.30, "Medium"), (0.10, "Small"), (0.00, "Negligible")]
@@ -901,13 +907,15 @@ class MultiSeedReporter:
             "skip": "#fdfefe",   # white (missing data)
         }
 
-        n_panels = len(_PRIMARY_VIZ_METRICS)
-        fig, axes = plt.subplots(1, n_panels,
-                                 figsize=(4.6 * n_panels, 5.0),
+        n_rows, n_cols = _VIZ_LAYOUT
+        fig, axes = plt.subplots(n_rows, n_cols,
+                                 figsize=(4.2 * n_cols, 5.2 * n_rows),
                                  squeeze=False)
 
-        for col_idx, metric in enumerate(_PRIMARY_VIZ_METRICS):
-            ax   = axes[0][col_idx]
+        for panel_idx, metric in enumerate(_PRIMARY_VIZ_METRICS):
+            row_idx = panel_idx // n_cols
+            col_idx = panel_idx % n_cols
+            ax   = axes[row_idx][col_idx]
             mres = pairwise.get(metric, {})
 
             for i in range(n):
@@ -944,11 +952,21 @@ class MultiSeedReporter:
             ax.set_yticks(range(n))
             ax.set_xticklabels(short_labels, rotation=40, ha="right", fontsize=7.5)
             ax.set_yticklabels(list(reversed(short_labels)), fontsize=7.5)
-            ax.set_title(_METRIC_LABELS.get(metric, metric),
-                         fontsize=10, fontweight="bold", pad=8)
+            # Mark lower-is-better metrics with ↓ in title
+            title = _METRIC_LABELS.get(metric, metric)
+            if metric in _LOWER_IS_BETTER:
+                title += "  ↓"
+            ax.set_title(title, fontsize=9.5, fontweight="bold", pad=8)
             if col_idx == 0:
                 ax.set_ylabel("Loss A  (row)", fontsize=8)
-            ax.set_xlabel("Loss B  (col)", fontsize=8)
+            # Only show x-label on bottom row
+            if row_idx == n_rows - 1:
+                ax.set_xlabel("Loss B  (col)", fontsize=8)
+
+        # Hide unused axes if n_metrics < n_rows * n_cols
+        n_metrics = len(_PRIMARY_VIZ_METRICS)
+        for extra in range(n_metrics, n_rows * n_cols):
+            axes[extra // n_cols][extra % n_cols].set_visible(False)
 
         legend_handles = [
             mpatches.Patch(facecolor=_COLORS["win"],  edgecolor="#888",
@@ -956,20 +974,20 @@ class MultiSeedReporter:
             mpatches.Patch(facecolor=_COLORS["loss"], edgecolor="#888",
                            label="Row sig. worse (p_holm < 0.05)"),
             mpatches.Patch(facecolor=_COLORS["tie"],  edgecolor="#888",
-                           label="Not significant"),
+                           label="Not significant (ns)"),
         ]
         fig.legend(handles=legend_handles, loc="lower center", ncol=3,
-                   fontsize=8, bbox_to_anchor=(0.5, -0.01), framealpha=0.9)
+                   fontsize=9, bbox_to_anchor=(0.5, 0.0), framealpha=0.9)
 
         fig.suptitle(
             f"Pairwise Significance Matrix — {self.cfg.name}  "
             f"(Wilcoxon signed-rank, Holm-corrected, {len(self.seeds)} seeds)\n"
-            f"Cell: significance marker (* p<0.05  ** p<0.01  *** p<0.001) "
-            f"+ rank-biserial rᵣᵥ",
-            fontsize=8.5, y=1.02,
+            f"Cell: * p<0.05  ** p<0.01  *** p<0.001  |  r = rank-biserial effect size  "
+            f"|  ↓ = lower-is-better metric",
+            fontsize=9, y=1.01,
         )
 
-        plt.tight_layout(rect=[0, 0.07, 1, 1.0])
+        plt.tight_layout(rect=[0, 0.05, 1, 1.0])
 
         out_path = self.out_dir / "significance_matrix.png"
         fig.savefig(str(out_path), dpi=200, bbox_inches="tight", facecolor="white")
