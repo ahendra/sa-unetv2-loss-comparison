@@ -736,18 +736,24 @@ def _evaluation_menu(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> N
     print()
 
     loss_items = list(LOSS_FUNCTIONS.items())
-    options = [
-        f"{v}"
-        + (" [✓ bobot]" if trainer.weights_exist(k, seed_tag=seed_tag) else "")
-        + (" [✓ hasil]" if evaluator.results_exist(k) else "")
-        for k, v in loss_items
-    ] + ["Evaluasi Semua Model"]
+    options = (
+        [
+            f"{v}"
+            + (" [✓ bobot]" if trainer.weights_exist(k, seed_tag=seed_tag) else "")
+            + (" [✓ hasil]" if evaluator.results_exist(k) else "")
+            for k, v in loss_items
+        ]
+        + ["Evaluasi Semua Model (satu seed)"]
+        + ["Multi-Seed — Evaluasi Semua Loss (Mean ± SD)"]
+    )
 
     choice = _prompt(options, back_label="Kembali ke menu dataset")
     if choice == 0:
         return
-    if choice == len(options):
+    elif choice == len(loss_items) + 1:
         _evaluate_all(trainer, evaluator, cfg, seed_tag=seed_tag)
+    elif choice == len(loss_items) + 2:
+        _multi_seed_evaluate_all(trainer, evaluator, cfg)
     else:
         key, label = loss_items[choice - 1]
         _evaluate_single(trainer, evaluator, cfg, key, seed_tag=seed_tag)
@@ -796,6 +802,107 @@ def _evaluate_all(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg,
             evaluator.evaluate(model, loss_key, x_test, y_test, masks, restore_fn)
         except Exception as e:
             print(f"  [ERROR] {e}")
+
+    input("\n  Selesai. Tekan Enter untuk kembali...")
+
+
+def _multi_seed_evaluate_all(trainer: ModelTrainer, evaluator: ModelEvaluator, cfg) -> None:
+    """Evaluasi semua fungsi loss untuk semua seed — satu invokasi tanpa interupsi."""
+    _header(f"Multi-Seed Evaluasi — Semua Loss — {cfg.name}")
+    print("  Evaluasi semua fungsi loss secara berurutan untuk setiap seed.")
+    print("  Jika hasil sudah ada untuk seed tertentu, run tersebut dilewati otomatis.\n")
+
+    # ── Input seeds ────────────────────────────────────────────────────────────
+    print("  Contoh: 42 123 456 789 2026")
+    raw = input("  Masukkan seeds (pisahkan spasi): ").strip()
+    seeds = []
+    for tok in raw.split():
+        try:
+            seeds.append(int(tok))
+        except ValueError:
+            pass
+    if not seeds:
+        print("  [ERROR] Tidak ada seed valid. Kembali.")
+        input("  Tekan Enter...")
+        return
+
+    n_loss  = len(LOSS_FUNCTIONS)
+    n_seeds = len(seeds)
+    print(f"\n  Seeds      : {seeds}")
+    print(f"  Loss       : {n_loss} fungsi (semua)")
+    print(f"  Total runs : {n_seeds * n_loss}")
+    confirm = input("  Mulai? (y/n): ").strip().lower()
+    if confirm != 'y':
+        return
+
+    # ── Muat data test sekali ──────────────────────────────────────────────────
+    x_test, y_test, masks, restore_fn = _load_test_data(cfg)
+    if x_test is None:
+        return
+
+    # summary: {loss_key: {"label": str, "metrics": {seed_int: result_dict_pct}}}
+    summary: dict = {}
+
+    # ── Loop semua loss ────────────────────────────────────────────────────────
+    for loss_idx, (loss_key, loss_label) in enumerate(LOSS_FUNCTIONS.items()):
+        print(f"\n{'═' * 60}")
+        print(f"  [{loss_idx + 1}/{n_loss}] {loss_label}")
+        print(f"{'═' * 60}")
+
+        seed_metrics: dict = {}   # seed_int → result dict (nilai dalam %)
+
+        for seed in seeds:
+            tag = f"seed{seed}"
+            print(f"\n  {'─' * 40}")
+            print(f"  seed={seed}  →  {loss_key}_{tag}")
+
+            if evaluator.results_exist(loss_key, seed_tag=tag):
+                print(f"  Hasil sudah ada — dilewati, memuat dari file.")
+                saved = evaluator.load_results(loss_key, seed_tag=tag)
+                if saved:
+                    seed_metrics[seed] = saved
+                continue
+
+            if not trainer.weights_exist(loss_key, seed_tag=tag):
+                print(f"  [SKIP] Tidak ada bobot untuk '{loss_key}' [{tag}].")
+                continue
+
+            try:
+                model = trainer.load_weights(loss_key, seed_tag=tag)
+                evaluator.evaluate(model, loss_key, x_test, y_test,
+                                   masks, restore_fn, seed_tag=tag)
+                saved = evaluator.load_results(loss_key, seed_tag=tag)
+                if saved:
+                    seed_metrics[seed] = saved
+            except Exception as e:
+                print(f"  [ERROR] Evaluasi gagal: {e}")
+
+        summary[loss_key] = {"label": loss_label, "metrics": seed_metrics}
+
+    # ── Ringkasan akhir ────────────────────────────────────────────────────────
+    def _fmt_pct(vals: list) -> str:
+        if not vals:
+            return "—"
+        mean = float(np.mean(vals))
+        std  = float(np.std(vals, ddof=1)) if len(vals) > 1 else 0.0
+        return f"{mean:.2f} ± {std:.2f}"
+
+    print(f"\n{'═' * 80}")
+    print(f"  RINGKASAN MULTI-SEED EVALUASI — {cfg.name}")
+    print(f"{'═' * 80}")
+    print(f"  {'Fungsi Loss':26s}  {'Runs':>8}  {'F1 mean±SD (%)':>22}  {'AUC mean±SD (%)':>22}")
+    print(f"  {'─' * 26}  {'─' * 8}  {'─' * 22}  {'─' * 22}")
+
+    for loss_key, info in summary.items():
+        sm     = info["metrics"]
+        n_done = len(sm)
+        f1_vals  = [v["f1"]  for v in sm.values() if "f1"  in v]
+        auc_vals = [v["auc"] for v in sm.values() if "auc" in v]
+
+        print(f"  {info['label'][:26]:26s}  "
+              f"{n_done:>4}/{n_seeds:>3}  "
+              f"{_fmt_pct(f1_vals):>22}  "
+              f"{_fmt_pct(auc_vals):>22}")
 
     input("\n  Selesai. Tekan Enter untuk kembali...")
 
