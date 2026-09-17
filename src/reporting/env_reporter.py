@@ -12,36 +12,48 @@ class EnvironmentReporter:
 
     def collect(self) -> dict:
         import platform
-        import tensorflow as tf
-        import keras
-        import optuna
 
         info = {
-            "python_version":     sys.version,
-            "tensorflow_version": tf.__version__,
-            "keras_version":      keras.__version__,
-            "optuna_version":     optuna.__version__,
-            "platform":           platform.platform(),
-            "cpu_count":          os.cpu_count(),
+            "python_version": sys.version,
+            "platform":       platform.platform(),
+            "cpu_count":      os.cpu_count(),
         }
+
+        try:
+            import tensorflow as tf
+            info["tensorflow_version"] = tf.__version__
+            gpus = tf.config.list_physical_devices("GPU")
+            gpu_list = []
+            for gpu in gpus:
+                entry = {"name": gpu.name}
+                try:
+                    details = tf.config.experimental.get_device_details(gpu)
+                    entry["device_name"] = details.get("device_name", "unknown")
+                except Exception:
+                    pass
+                gpu_list.append(entry)
+            info["gpu_info"] = gpu_list if gpu_list else ["No GPU detected"]
+        except ImportError:
+            info["tensorflow_version"] = "N/A (tensorflow not installed)"
+            info["gpu_info"] = ["N/A (tensorflow not installed)"]
+
+        try:
+            import keras
+            info["keras_version"] = keras.__version__
+        except ImportError:
+            info["keras_version"] = "N/A (keras not installed)"
+
+        try:
+            import optuna
+            info["optuna_version"] = optuna.__version__
+        except ImportError:
+            info["optuna_version"] = "N/A (optuna not installed)"
 
         try:
             import psutil
             info["ram_gb"] = round(psutil.virtual_memory().total / 1e9, 2)
         except ImportError:
             info["ram_gb"] = "N/A (install psutil)"
-
-        gpus = tf.config.list_physical_devices("GPU")
-        gpu_list = []
-        for gpu in gpus:
-            entry = {"name": gpu.name}
-            try:
-                details = tf.config.experimental.get_device_details(gpu)
-                entry["device_name"] = details.get("device_name", "unknown")
-            except Exception:
-                pass
-            gpu_list.append(entry)
-        info["gpu_info"] = gpu_list if gpu_list else ["No GPU detected"]
 
         return info
 
