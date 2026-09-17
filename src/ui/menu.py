@@ -1495,6 +1495,164 @@ def _view_all_results() -> None:
     input("\n\n  Tekan Enter untuk kembali ke Main Menu...")
 
 
+_MS_METRIC_HEADERS = [
+    "Loss Function",
+    "Accuracy (mean±SD %)", "Sensitivity (mean±SD %)", "Specificity (mean±SD %)",
+    "AUC (mean±SD %)", "MCC (mean±SD %)", "F1 (mean±SD %)",
+    "Jaccard (mean±SD %)", "clDice (mean±SD %)",
+    "β0 Err (mean±SD)", "β1 Err (mean±SD)",
+]
+
+
+def _save_multiseed_excel(data_by_ds: dict) -> Optional[Path]:
+    """Save multi-seed mean±SD results to Excel.
+
+    data_by_ds: {ds_label: (summary_dict, meta_dict)}
+      summary_dict: {loss_key: {metric: {mean, std, n, raw}}}
+      meta_dict:    {n_seeds, seeds}
+    """
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font
+    except ImportError:
+        print("\n  [WARN] openpyxl tidak terinstall, skip export Excel.")
+        print("         Install dengan: pip install openpyxl")
+        return None
+
+    bold        = Font(bold=True)
+    header_font = Font(bold=True)
+    wb = Workbook()
+    wb.remove(wb.active)
+
+    for ds_label, (summary, meta) in data_by_ds.items():
+        ws      = wb.create_sheet(title=ds_label)
+        n_seeds = meta.get("n_seeds", "?")
+        seeds   = meta.get("seeds", [])
+
+        # ── Header row ─────────────────────────────────────────────────────
+        for c, h in enumerate(_MS_METRIC_HEADERS, 1):
+            ws.cell(row=1, column=c, value=h).font = header_font
+
+        # ── Data rows ──────────────────────────────────────────────────────
+        loss_order = [k for k in LOSS_FUNCTIONS if k in summary]
+        mean_tracker: dict = {mkey: [] for mkey in _METRIC_KEYS}
+
+        for r, loss_key in enumerate(loss_order, 2):
+            per_metric = summary[loss_key]
+            ws.cell(row=r, column=1, value=LOSS_FUNCTIONS[loss_key])
+            for c, mkey in enumerate(_METRIC_KEYS, 2):
+                entry = per_metric.get(mkey)
+                if entry:
+                    mean = entry["mean"]
+                    std  = entry["std"]
+                    n    = entry.get("n", n_seeds)
+                    ws.cell(row=r, column=c,
+                            value=f"{mean:.2f} ± {std:.2f}" if n > 1
+                                  else f"{mean:.2f}")
+                    mean_tracker[mkey].append((r, mean))
+                else:
+                    ws.cell(row=r, column=c, value="—")
+                    mean_tracker[mkey].append((r, None))
+
+        # ── Bold best mean per metric ──────────────────────────────────────
+        for col_off, mkey in enumerate(_METRIC_KEYS):
+            col_idx = col_off + 2
+            valid = [(r, m) for r, m in mean_tracker[mkey] if m is not None]
+            if not valid:
+                continue
+            best = (min if mkey in _LOWER_IS_BETTER else max)(m for _, m in valid)
+            for r, m in valid:
+                if abs(m - best) < 1e-9:
+                    ws.cell(row=r, column=col_idx).font = bold
+
+        # ── Note row ───────────────────────────────────────────────────────
+        note_row = len(loss_order) + 2
+        ws.cell(row=note_row, column=1,
+                value=(f"N seeds = {n_seeds}  |  Seeds: {seeds}  "
+                       f"|  SD: ddof=1 (unbiased)  "
+                       f"|  Nilai dalam persen (%) kecuali β0/β1"))
+
+        # ── Auto column width ──────────────────────────────────────────────
+        for col in ws.columns:
+            width = max(len(str(cell.value or "")) for cell in col)
+            ws.column_dimensions[col[0].column_letter].width = width + 4
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_path  = RESULTS_DIR / f"multiseed_results_{timestamp}.xlsx"
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    wb.save(str(out_path))
+    return out_path
+
+
+def _view_multiseed_results() -> None:
+    _clear()
+    _header("Multi-Seed Evaluation Results (Mean ± SD)")
+
+    try:
+        from tabulate import tabulate
+    except ImportError:
+        tabulate = None
+
+    data_by_ds: dict = {}
+
+    for ds in ("drive", "stare"):
+        ms = _load_multiseed_summary(ds)
+        if not ms:
+            print(f"\n  [SKIP] {ds.upper()}: multiseed_summary.json tidak ditemukan.")
+            print(f"         Jalankan dulu: Reporting → 4.10 Multi-Seed Analysis")
+            continue
+
+        summary = ms.get("summary", {})
+        n_seeds = ms.get("n_seeds", "?")
+        seeds   = ms.get("seeds", [])
+
+        print(f"\n  ── Dataset: {ds.upper()} — {n_seeds} seeds: {seeds} ──\n")
+
+        ms_term_headers = [
+            "Loss Function", "Acc%", "Sens%", "Spec%", "AUC%",
+            "MCC%", "F1%", "Jacc%", "clDice%", "β0↓", "β1↓",
+        ]
+        str_rows = []
+        for loss_key, loss_label in LOSS_FUNCTIONS.items():
+            per_metric = summary.get(loss_key, {})
+            row = [loss_label]
+            for mkey in _METRIC_KEYS:
+                entry = per_metric.get(mkey)
+                if entry:
+                    n    = entry.get("n", n_seeds)
+                    mean = entry["mean"]
+                    std  = entry["std"]
+                    row.append(f"{mean:.2f}±{std:.2f}" if n > 1
+                               else f"{mean:.2f}")
+                else:
+                    row.append("—")
+            str_rows.append(row)
+
+        if tabulate:
+            print(tabulate(str_rows, headers=ms_term_headers,
+                           tablefmt="rounded_outline"))
+        else:
+            col_w = [max(len(str(r[i])) for r in [ms_term_headers] + str_rows)
+                     for i in range(len(ms_term_headers))]
+            fmt = "  " + "  ".join(f"{{:<{w}}}" for w in col_w)
+            print(fmt.format(*ms_term_headers))
+            print("  " + "  ".join("-" * w for w in col_w))
+            for row in str_rows:
+                print(fmt.format(*row))
+
+        data_by_ds[ds.upper()] = (summary, {"n_seeds": n_seeds, "seeds": seeds})
+
+    if data_by_ds:
+        excel_path = _save_multiseed_excel(data_by_ds)
+        if excel_path:
+            print(f"\n  Excel tersimpan di: {excel_path}")
+    else:
+        print("\n  Tidak ada data multi-seed ditemukan.")
+        print("  Pastikan Phase 9, Phase 10, dan Section 4.10 report sudah dijalankan.")
+
+    input("\n\n  Tekan Enter untuk kembali ke Main Menu...")
+
+
 # ── Main Menu ─────────────────────────────────────────────────────────────────
 
 def run_main_menu() -> None:
@@ -1508,6 +1666,7 @@ def run_main_menu() -> None:
                 "Select Dataset (DRIVE)",
                 "Select Dataset (STARE)",
                 "View All Evaluation Results",
+                "Multi-Seed Results (Mean ± SD) + Export Excel",
             ],
             back_label="Exit",
         )
@@ -1521,3 +1680,5 @@ def run_main_menu() -> None:
             _dataset_menu("STARE")
         elif choice == 3:
             _view_all_results()
+        elif choice == 4:
+            _view_multiseed_results()
