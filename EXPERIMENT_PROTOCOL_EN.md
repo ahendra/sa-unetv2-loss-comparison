@@ -394,7 +394,7 @@ results/drive/history/
 ```
 [1] DRIVE → [3] Evaluasi Model
   → Seed tag: [leave blank, press Enter]
-  → [Evaluasi Semua Model]
+  → [Evaluasi Semua Model (satu seed)]
 ```
 
 ### Menu — STARE
@@ -402,7 +402,7 @@ results/drive/history/
 ```
 [2] STARE → [3] Evaluasi Model
   → Seed tag: [leave blank, press Enter]
-  → [Evaluasi Semua Model]
+  → [Evaluasi Semua Model (satu seed)]
 ```
 
 ### Output (10 metrics: accuracy, F1, AUC, MCC, Jaccard, clDice, sensitivity, specificity, β0, β1)
@@ -453,15 +453,29 @@ results/drive/history/
 
 **Total: 5 seeds × 7 losses × 2 datasets = 70 evaluation runs.**
 
-### Menu — Per seed, DRIVE (repeat 5 times with different seed tags)
+### Menu — All seeds at once, DRIVE (recommended)
 
 ```
 [1] DRIVE → [3] Evaluasi Model
-  → Seed tag: seed42          ← repeat with: seed42, seed123, seed456, seed789, seed2026
-  → [Evaluasi Semua Model]
+  → Seed tag: [leave blank, press Enter]
+  → [Multi-Seed — Evaluasi Semua Loss (Mean ± SD)]
+  → Enter seeds: 42 123 456 789 2026
+  → Confirm: y
 ```
 
-Repeat for each seed tag and for STARE.
+One invocation runs all 7 loss functions × 5 seeds sequentially without further interaction. If evaluation results already exist for a given loss + seed combination, that run is skipped automatically (loaded from file). Repeat for STARE.
+
+After completion, the terminal prints a summary table:
+
+```
+  RINGKASAN MULTI-SEED EVALUASI — DRIVE
+  Fungsi Loss                 Runs      F1 mean±SD (%)     AUC mean±SD (%)
+  ─────────────────────────────────────────────────────────────────────────
+  BCE + MCC (Baseline)        5/  5          82.34 ± 0.45       98.52 ± 0.12
+  ...
+```
+
+> **Alternative (manual per seed):** Enter a seed tag (e.g. `seed42`), choose `[Evaluasi Semua Model (satu seed)]`, and repeat 5 times — one per seed. Produces identical output files.
 
 ### Output
 
