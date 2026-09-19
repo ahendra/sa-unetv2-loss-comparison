@@ -232,7 +232,8 @@ class ComputationalTimeReporter:
                                 txt, ha="center", va="bottom", fontsize=9)
 
             ax.set_xticks(x)
-            ax.set_xticklabels(loss_labels, rotation=20, ha="right")
+            ax.set_xticklabels(loss_labels, rotation=35, ha="right",
+                               rotation_mode="anchor")
             ax.set_ylabel("Epochs to Convergence")
             ax.set_title(
                 f"Epochs to Convergence per Loss Function\n{subtitle}",
@@ -387,7 +388,8 @@ class ComputationalTimeReporter:
                         )
 
             ax.set_xticks(x)
-            ax.set_xticklabels(loss_labels, rotation=20, ha="right")
+            ax.set_xticklabels(loss_labels, rotation=35, ha="right",
+                               rotation_mode="anchor")
             ax.set_ylabel("Training Time (minutes)")
             ax.set_title(
                 f"Total Training Time per Loss Function\n{subtitle}",
@@ -699,7 +701,8 @@ class ComputationalTimeReporter:
                                 ha="center", va="bottom", fontsize=9)
 
                 ax.set_xticks(x)
-                ax.set_xticklabels(loss_labels, rotation=20, ha="right")
+                ax.set_xticklabels(loss_labels, rotation=35, ha="right",
+                                   rotation_mode="anchor")
                 ax.set_ylabel("Time per Step (ms)")
                 ax.set_title(
                     f"Computation Time per Training Step — {_DS_LABELS[ds_name]}",

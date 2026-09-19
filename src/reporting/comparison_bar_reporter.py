@@ -205,7 +205,8 @@ class ComparisonBarReporter:
                             ha="center", va="bottom", fontsize=10, rotation=0)
 
                 ax.set_xticks(range(n_losses))
-                ax.set_xticklabels(loss_labels, rotation=35, ha="right", fontsize=12)
+                ax.set_xticklabels(loss_labels, rotation=45, ha="right",
+                                   rotation_mode="anchor", fontsize=12)
                 ax.set_ylabel(_Y_AXIS_LABEL.get(mkey, "Score (%)"), fontsize=12)
                 ax.set_title(mlabel, fontsize=13, fontweight="bold", color=mcolor)
                 ax.set_xlim(-0.6, n_losses - 0.4)
