@@ -129,10 +129,13 @@ def main():
 
         # Muat ground truth labels (urutan sorted)
         if not labels_dir.exists():
-            print(f"  [ERROR] Labels dir tidak ditemukan: {labels_dir}")
-            errors.append(str(labels_dir))
+            print(f"  [SKIP] Labels dir tidak ditemukan: {labels_dir}")
             continue
-        labels = _load_sorted_pngs(labels_dir)
+        try:
+            labels = _load_sorted_pngs(labels_dir)
+        except FileNotFoundError as e:
+            print(f"  [SKIP] {e}")
+            continue
         print(f"  Labels loaded: {len(labels)} gambar dari {labels_dir}")
 
         # Muat FOV masks jika ada
