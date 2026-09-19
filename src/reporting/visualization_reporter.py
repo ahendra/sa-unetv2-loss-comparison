@@ -14,7 +14,6 @@ _ROW_LABELS = {
     "id": [
         "Gambar Input",
         "Ground Truth\n(Manual Annotation)",
-        "Peta Probabilitas\n(Sebelum Threshold)",
         "Prediksi Biner\n(Threshold 0.5)",
         "Peta Kesalahan\n(TP / TN / FP / FN)",
         "Detail Ground Truth\n(Zoom Pusat Retina)",
@@ -24,7 +23,6 @@ _ROW_LABELS = {
     "en": [
         "Input Image",
         "Ground Truth\n(Manual Annotation)",
-        "Probability Map\n(Pre-threshold)",
         "Binary Prediction\n(Threshold 0.5)",
         "Error Map\n(TP / TN / FP / FN)",
         "Ground Truth Detail\n(Centre Crop)",
@@ -39,7 +37,7 @@ _LEGEND_TEXT = {
         "tn":        "TN — Background terdeteksi benar",
         "fp":        "FP — Background diprediksi sebagai vessel",
         "fn":        "FN — Vessel tidak terdeteksi",
-        "title":     "Keterangan Warna — Peta Kesalahan (Baris 5)",
+        "title":     "Keterangan Warna — Peta Kesalahan (Baris 4)",
         "na_detail": "N/A\n(belum dievaluasi)",
         "na":        "N/A",
     },
@@ -48,13 +46,13 @@ _LEGEND_TEXT = {
         "tn":        "TN — Background correctly detected",
         "fp":        "FP — Background predicted as vessel",
         "fn":        "FN — Vessel not detected",
-        "title":     "Colour Legend — Error Map (Row 5)",
+        "title":     "Colour Legend — Error Map (Row 4)",
         "na_detail": "N/A\n(not yet evaluated)",
         "na":        "N/A",
     },
 }
 
-_N_IMG_ROWS    = 8
+_N_IMG_ROWS    = 7
 _DEFAULT_SEEDS = [42, 123, 456, 789, 2026]
 
 # A4 two-column full-width: text area = (210 − 13 − 13) mm = 184 mm
@@ -122,20 +120,19 @@ def _find_median_seeds(
 class VisualizationReporter:
     """Build per-sample segmentation comparison grids for Section 4.5.
 
-    Grid layout per file (8 image rows + 1 label row + 1 legend row):
+    Grid layout per file (7 image rows + 1 label row + 1 legend row):
 
       Row 0 — Input image               : padded test image
       Row 1 — Ground Truth              : manual annotation (grayscale)
-      Row 2 — Probability Map           : raw sigmoid output (pre-threshold)
-      Row 3 — Binary Prediction         : thresholded prediction (grayscale)
-      Row 4 — Error Map                 : colour-coded TP / TN / FP / FN
-      Row 5 — Ground Truth Detail (Zoom): centre-crop of ground truth
-      Row 6 — Prediction Detail (Zoom)  : centre-crop of binary prediction
-      Row 7 — Error Map Detail (Zoom)   : centre-crop of error map
+      Row 2 — Binary Prediction         : thresholded prediction (grayscale)
+      Row 3 — Error Map                 : colour-coded TP / TN / FP / FN
+      Row 4 — Ground Truth Detail (Zoom): centre-crop of ground truth
+      Row 5 — Prediction Detail (Zoom)  : centre-crop of binary prediction
+      Row 6 — Error Map Detail (Zoom)   : centre-crop of error map
       [col-label row]                   : loss-function names
       [legend row]                      : colour coding key
 
-    Rows 0–4 carry a red rectangle marking the zoom region.
+    Rows 0–3 carry a red rectangle marking the zoom region.
 
     Colour coding (Error Map) — colorblind-safe palette (Wong 2011):
       TP = Bluish-green (#009E73)
@@ -329,15 +326,10 @@ class VisualizationReporter:
                         / "predictions" / f"{loss_key}_{seed_tag}"
                     )
                     pred_path = pred_dir / f"pred_{img_idx + 1:03d}.png"
-                    prob_path = pred_dir / f"prob_{img_idx + 1:03d}.png"
 
                     pred_img = (
                         cv2.imread(str(pred_path), cv2.IMREAD_GRAYSCALE)
                         if pred_path.exists() else None
-                    )
-                    prob_img = (
-                        cv2.imread(str(prob_path), cv2.IMREAD_GRAYSCALE)
-                        if prob_path.exists() else None
                     )
                     short_label = loss_label.replace(" (Baseline)", "")
 
@@ -376,20 +368,8 @@ class VisualizationReporter:
                     _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     ax.axis("off")
 
-                    # ── Row 2: Probability map (pre-threshold) ────────────────
+                    # ── Row 2: Binary prediction ──────────────────────────────
                     ax = axes[2, col_idx]
-                    if prob_img is not None:
-                        ax.imshow(prob_img, cmap="gray", vmin=0, vmax=255)
-                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
-                    else:
-                        ax.set_facecolor("#f0f0f0")
-                        ax.text(0.5, 0.5, txt["na_detail"],
-                                ha="center", va="center",
-                                transform=ax.transAxes, fontsize=7, color="#666")
-                    ax.axis("off")
-
-                    # ── Row 3: Binary prediction ──────────────────────────────
-                    ax = axes[3, col_idx]
                     if pred_img is not None:
                         ax.imshow(pred_img, cmap="gray", vmin=0, vmax=255)
                         _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
@@ -400,8 +380,8 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Row 4: Error map ──────────────────────────────────────
-                    ax = axes[4, col_idx]
+                    # ── Row 3: Error map ──────────────────────────────────────
+                    ax = axes[3, col_idx]
                     if err_map is not None:
                         ax.imshow(err_map)
                         _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
@@ -412,13 +392,13 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Row 5: Zoomed ground truth ────────────────────────────
-                    ax = axes[5, col_idx]
+                    # ── Row 4: Zoomed ground truth ────────────────────────────
+                    ax = axes[4, col_idx]
                     ax.imshow(gt_disp[zy1:zy2, zx1:zx2], cmap="gray", vmin=0, vmax=1)
                     ax.axis("off")
 
-                    # ── Row 6: Zoomed binary prediction ──────────────────────
-                    ax = axes[6, col_idx]
+                    # ── Row 5: Zoomed binary prediction ──────────────────────
+                    ax = axes[5, col_idx]
                     if pred_img is not None:
                         ax.imshow(pred_img[zy1:zy2, zx1:zx2], cmap="gray",
                                   vmin=0, vmax=255)
@@ -429,8 +409,8 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Row 7: Zoomed error map ───────────────────────────────
-                    ax = axes[7, col_idx]
+                    # ── Row 6: Zoomed error map ───────────────────────────────
+                    ax = axes[6, col_idx]
                     if err_map is not None:
                         ax.imshow(err_map[zy1:zy2, zx1:zx2])
                     else:
