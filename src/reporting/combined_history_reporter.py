@@ -166,11 +166,11 @@ class CombinedHistoryReporter:
                     Line2D([0], [0], color=_C_TRAIN, lw=1.6, ls="-",
                            label=f"Train Mean (N={n})"),
                     Patch(facecolor=_C_TRAIN, alpha=0.20, edgecolor="none",
-                          label="Train ±1 SD"),
+                          label="Train ± SD"),
                     Line2D([0], [0], color=_C_VAL, lw=1.6, ls="-",
                            label=f"Val Mean (N={n})"),
                     Patch(facecolor=_C_VAL, alpha=0.20, edgecolor="none",
-                          label="Val ±1 SD"),
+                          label="Val ± SD"),
                     Line2D([0], [0], color=_C_BEST, lw=1.0, ls=":",
                            label="Best Mean Epoch"),
                 ]
@@ -239,16 +239,6 @@ class CombinedHistoryReporter:
         m_val   = val_arr.mean(axis=0)   if len(val_arr) else np.array([])
         s_val   = (val_arr.std(axis=0, ddof=1)
                    if len(val_arr) > 1 else np.zeros(min_v))
-
-        # Individual seed curves — very thin, semi-transparent
-        for t_curve in train_lists:
-            if len(t_curve) >= min_t:
-                ax.plot(ep_t, t_curve[:min_t],
-                        color=_C_TRAIN, alpha=0.18, lw=0.6)
-        for v_curve in val_lists:
-            if len(v_curve) >= min_v:
-                ax.plot(ep_v, v_curve[:min_v],
-                        color=_C_VAL, alpha=0.18, lw=0.6)
 
         # Mean curves + SD band
         if len(m_train):

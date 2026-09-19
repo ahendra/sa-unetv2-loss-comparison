@@ -111,32 +111,22 @@ class HistoryReporter:
             fig, ax = plt.subplots(figsize=(9, 4.5))
             fig.patch.set_facecolor("#ffffff")
 
-            # Individual seed curves — thin, semi-transparent
-            n = len(histories)
-            for t_curve in train_lists:
-                if len(t_curve) >= min_t:
-                    ax.plot(ep_t, t_curve[:min_t],
-                            color=_C_TRAIN, alpha=0.18, lw=0.8)
-            for v_curve in val_lists:
-                if len(v_curve) >= min_v:
-                    ax.plot(ep_v, v_curve[:min_v],
-                            color=_C_VAL, alpha=0.18, lw=0.8)
-
             # Mean ± SD
+            n = len(histories)
             if len(m_train):
                 ax.plot(ep_t, m_train, color=_C_TRAIN, lw=2.0,
                         label=f"Train Loss (Mean, N={n})")
                 ax.fill_between(ep_t,
                                 m_train - s_train,
                                 m_train + s_train,
-                                alpha=0.18, color=_C_TRAIN, label="Train ±1 SD")
+                                alpha=0.18, color=_C_TRAIN, label="Train ± SD")
             if len(m_val):
                 ax.plot(ep_v, m_val, color=_C_VAL, lw=2.0,
                         label=f"Val Loss (Mean, N={n})")
                 ax.fill_between(ep_v,
                                 m_val - s_val,
                                 m_val + s_val,
-                                alpha=0.18, color=_C_VAL, label="Val ±1 SD")
+                                alpha=0.18, color=_C_VAL, label="Val ± SD")
                 best_ep = int(np.argmin(m_val)) + 1
                 best_v  = float(m_val.min())
                 ax.axvline(best_ep, color="#7F8C8D", ls="--", lw=1.2,
