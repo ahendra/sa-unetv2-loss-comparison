@@ -61,12 +61,13 @@ _DEFAULT_SEEDS = [42, 123, 456, 789, 2026]
 _FIG_W_EN_IN = 184 / 25.4   # 7.244 in
 
 
-def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int) -> None:
+def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int,
+                   linewidth: float = 1.8) -> None:
     """Overlay a red rectangle that marks the zoomed crop region."""
     from matplotlib.patches import Rectangle
     ax.add_patch(Rectangle(
         (x1, y1), x2 - x1, y2 - y1,
-        linewidth=1.8, edgecolor="#FF0000", facecolor="none", zorder=10,
+        linewidth=linewidth, edgecolor="#FF0000", facecolor="none", zorder=10,
     ))
 
 
@@ -208,16 +209,19 @@ class VisualizationReporter:
 
         legend_patches = [
             Patch(facecolor=(  0/255, 158/255, 115/255), edgecolor="#888",
-                  label=txt["tp"]),
+                  label=txt["tp"]),   # #009E73 bluish-green
             Patch(facecolor="white",                     edgecolor="#888",
                   label=txt["tn"]),
-            Patch(facecolor=(230/255, 159/255,   0/255), edgecolor="#888",
-                  label=txt["fp"]),
-            Patch(facecolor=(  0/255, 114/255, 178/255), edgecolor="#888",
-                  label=txt["fn"]),
+            Patch(facecolor=(204/255,   0/255,   0/255), edgecolor="#888",
+                  label=txt["fp"]),   # #CC0000 crimson
+            Patch(facecolor=(  0/255,  87/255, 231/255), edgecolor="#888",
+                  label=txt["fn"]),   # #0057E7 bright blue
         ]
 
         # ── Layout parameters ─────────────────────────────────────────────────
+        _id_col_w  = 2.55   # ID column width in inches — reference for zoom box scaling
+        _id_lw     = 1.8    # zoom box linewidth used in ID version
+
         if self._lang == "en":
             fig_w         = _FIG_W_EN_IN
             col_w         = fig_w / n_cols
@@ -236,8 +240,9 @@ class VisualizationReporter:
             _top          = 0.99
             _row_label_fs = 7
             _legend_fs    = 8
+            _zoom_lw      = round(_id_lw * col_w / _id_col_w, 3)  # scale proportionally
         else:
-            col_w         = 2.55
+            col_w         = _id_col_w
             img_row_h     = 2.50
             col_label_h   = 0.28
             legend_h      = 0.46
@@ -247,6 +252,7 @@ class VisualizationReporter:
             _top          = 0.97
             _row_label_fs = 8
             _legend_fs    = 8
+            _zoom_lw      = _id_lw
 
         col_label_ratio = col_label_h / img_row_h
         leg_ratio       = legend_h    / img_row_h
@@ -347,9 +353,9 @@ class VisualizationReporter:
                                 interpolation=cv2.INTER_NEAREST,
                             )
                         err_map = np.full((*gt_bin.shape, 3), 255, dtype=np.uint8)
-                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 158, 115]  # TP
-                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [230, 159,   0]  # FP
-                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0, 114, 178]  # FN
+                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 158, 115]  # TP  #009E73 bluish-green
+                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [204,   0,   0]  # FP  #CC0000 crimson
+                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0,  87, 231]  # FN  #0057E7 bright blue
 
                     # ── Row 0: Input image ────────────────────────────────────
                     orig = x_test[img_idx]
@@ -360,21 +366,21 @@ class VisualizationReporter:
 
                     ax = axes[0, col_idx]
                     ax.imshow(orig_disp, cmap=cmap_orig)
-                    _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                    _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     ax.axis("off")
                     ax.set_title(short_label, fontsize=8, pad=3, fontweight="bold")
 
                     # ── Row 1: Ground truth ───────────────────────────────────
                     ax = axes[1, col_idx]
                     ax.imshow(gt_disp, cmap="gray", vmin=0, vmax=1)
-                    _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                    _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     ax.axis("off")
 
                     # ── Row 2: Probability map (pre-threshold) ────────────────
                     ax = axes[2, col_idx]
                     if prob_img is not None:
                         ax.imshow(prob_img, cmap="gray", vmin=0, vmax=255)
-                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     else:
                         ax.set_facecolor("#f0f0f0")
                         ax.text(0.5, 0.5, txt["na_detail"],
@@ -386,7 +392,7 @@ class VisualizationReporter:
                     ax = axes[3, col_idx]
                     if pred_img is not None:
                         ax.imshow(pred_img, cmap="gray", vmin=0, vmax=255)
-                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     else:
                         ax.set_facecolor("#f0f0f0")
                         ax.text(0.5, 0.5, txt["na_detail"],
@@ -398,7 +404,7 @@ class VisualizationReporter:
                     ax = axes[4, col_idx]
                     if err_map is not None:
                         ax.imshow(err_map)
-                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2, _zoom_lw)
                     else:
                         ax.set_facecolor("#f0f0f0")
                         ax.text(0.5, 0.5, txt["na"],
