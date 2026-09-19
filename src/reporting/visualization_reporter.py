@@ -1,5 +1,6 @@
+import json
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Union
 
 import cv2
 import numpy as np
@@ -13,18 +14,22 @@ _ROW_LABELS = {
     "id": [
         "Gambar Input",
         "Ground Truth\n(Manual Annotation)",
+        "Peta Probabilitas\n(Sebelum Threshold)",
         "Prediksi Biner\n(Threshold 0.5)",
         "Peta Kesalahan\n(TP / TN / FP / FN)",
         "Detail Ground Truth\n(Zoom Pusat Retina)",
         "Detail Prediksi Biner\n(Zoom Pusat Retina)",
+        "Detail Peta Kesalahan\n(Zoom Pusat Retina)",
     ],
     "en": [
         "Input Image",
         "Ground Truth\n(Manual Annotation)",
+        "Probability Map\n(Pre-threshold)",
         "Binary Prediction\n(Threshold 0.5)",
         "Error Map\n(TP / TN / FP / FN)",
         "Ground Truth Detail\n(Centre Crop)",
         "Prediction Detail\n(Centre Crop)",
+        "Error Map Detail\n(Centre Crop)",
     ],
 }
 
@@ -34,7 +39,7 @@ _LEGEND_TEXT = {
         "tn":        "TN — Background terdeteksi benar",
         "fp":        "FP — Background diprediksi sebagai vessel",
         "fn":        "FN — Vessel tidak terdeteksi",
-        "title":     "Keterangan Warna — Peta Kesalahan (Baris 4)",
+        "title":     "Keterangan Warna — Peta Kesalahan (Baris 5)",
         "na_detail": "N/A\n(belum dievaluasi)",
         "na":        "N/A",
     },
@@ -43,13 +48,14 @@ _LEGEND_TEXT = {
         "tn":        "TN — Background correctly detected",
         "fp":        "FP — Background predicted as vessel",
         "fn":        "FN — Vessel not detected",
-        "title":     "Colour Legend — Error Map (Row 4)",
+        "title":     "Colour Legend — Error Map (Row 5)",
         "na_detail": "N/A\n(not yet evaluated)",
         "na":        "N/A",
     },
 }
 
-_N_IMG_ROWS = 6
+_N_IMG_ROWS    = 8
+_DEFAULT_SEEDS = [42, 123, 456, 789, 2026]
 
 # A4 two-column full-width: text area = (210 − 13 − 13) mm = 184 mm
 _FIG_W_EN_IN = 184 / 25.4   # 7.244 in
@@ -64,34 +70,86 @@ def _draw_zoom_box(ax, x1: int, y1: int, x2: int, y2: int) -> None:
     ))
 
 
+def _find_median_seeds(
+    cfg: Union[DriveConfig, StareConfig],
+    seeds: List[int],
+) -> Dict[str, str]:
+    """Return {loss_key: seed_tag} where seed_tag is the seed whose F1 is
+    closest to the mean F1 across all seeds (most representative result).
+    Falls back to the first seed if multiseed_summary.json is missing.
+    """
+    summary_path = (
+        RESULTS_DIR / cfg.name.lower()
+        / "reports" / "section_4_10_multiseed"
+        / cfg.name.lower() / "multiseed_summary.json"
+    )
+    fallback_tag = f"seed{seeds[0]}"
+    fallback     = {k: fallback_tag for k in LOSS_FUNCTIONS}
+
+    if not summary_path.exists():
+        print(f"  [WARN] multiseed_summary.json tidak ditemukan — "
+              f"menggunakan {fallback_tag} untuk semua loss.")
+        return fallback
+
+    with open(summary_path) as f:
+        data = json.load(f)
+
+    # Support both flat {loss_key: {...}} and nested {"summary": {loss_key: {...}}}
+    summary = data.get("summary", data)
+
+    result: Dict[str, str] = {}
+    print(f"\n  Median seed per loss function (F1 paling dekat ke mean):")
+    for loss_key in LOSS_FUNCTIONS:
+        f1_info  = summary.get(loss_key, {}).get("f1", {})
+        raw_vals = f1_info.get("raw", [])
+        mean_f1  = f1_info.get("mean", None)
+
+        if not raw_vals or mean_f1 is None or len(raw_vals) != len(seeds):
+            result[loss_key] = fallback_tag
+            print(f"    {loss_key:<12} → {fallback_tag} (fallback)")
+            continue
+
+        best_idx = min(range(len(seeds)), key=lambda i: abs(raw_vals[i] - mean_f1))
+        seed_tag = f"seed{seeds[best_idx]}"
+        result[loss_key] = seed_tag
+        print(f"    {loss_key:<12} → {seed_tag}  "
+              f"(F1={raw_vals[best_idx]:.2f}%, mean={mean_f1:.2f}%)")
+
+    return result
+
+
 class VisualizationReporter:
     """Build per-sample segmentation comparison grids for Section 4.5.
 
-    Grid layout per file (6 image rows + 1 label row + 1 legend row):
+    Grid layout per file (8 image rows + 1 label row + 1 legend row):
 
       Row 0 — Input image               : padded test image
       Row 1 — Ground Truth              : manual annotation (grayscale)
-      Row 2 — Binary Prediction         : thresholded prediction (grayscale)
-      Row 3 — Error Map                 : colour-coded TP / TN / FP / FN
-      Row 4 — Ground Truth Detail (Zoom): centre-crop of ground truth
-      Row 5 — Prediction Detail (Zoom)  : centre-crop of binary prediction
+      Row 2 — Probability Map           : raw sigmoid output (pre-threshold)
+      Row 3 — Binary Prediction         : thresholded prediction (grayscale)
+      Row 4 — Error Map                 : colour-coded TP / TN / FP / FN
+      Row 5 — Ground Truth Detail (Zoom): centre-crop of ground truth
+      Row 6 — Prediction Detail (Zoom)  : centre-crop of binary prediction
+      Row 7 — Error Map Detail (Zoom)   : centre-crop of error map
       [col-label row]                   : loss-function names
       [legend row]                      : colour coding key
 
-    Rows 0–3 carry a red rectangle marking the zoom region.
+    Rows 0–4 carry a red rectangle marking the zoom region.
 
     Colour coding (Error Map) — colorblind-safe palette (Wong 2011):
-      TP = Bluish-green (#009E73) — vessel correctly detected
-      TN = White                  — background correctly detected
-      FP = Orange       (#E69F00) — background predicted as vessel
-      FN = Blue         (#0072B2) — vessel not detected
+      TP = Bluish-green (#009E73)
+      TN = White
+      FP = Orange       (#E69F00)
+      FN = Blue         (#0072B2)
+
+    Predictions are sourced from the median seed per loss function — the seed
+    whose F1 score is closest to the mean F1 across all seeds — giving the
+    most representative visual result for each loss function.
 
     Parameters
     ----------
-    lang : "id" (default) or "en"
-        "id" — Indonesian labels, 150 dpi, large screen-size figure.
-        "en" — English labels, 300 dpi, A4 two-column full-width (184 mm),
-               Helvetica 8 pt, no suptitle — journal / publication format.
+    lang  : "id" (default) or "en"
+    seeds : list of experiment seeds; used to locate the median seed
     """
 
     def __init__(
@@ -101,12 +159,15 @@ class VisualizationReporter:
         n_samples: int = 3,
         zoom_fraction: float = 0.40,
         lang: str = "id",
+        seeds: Optional[List[int]] = None,
     ):
-        self._cfg       = cfg
-        self._out_dir   = output_dir
-        self._n_samples = n_samples
-        self._zoom_frac = zoom_fraction
-        self._lang      = lang
+        self._cfg          = cfg
+        self._out_dir      = output_dir
+        self._n_samples    = n_samples
+        self._zoom_frac    = zoom_fraction
+        self._lang         = lang
+        self._seeds        = seeds or _DEFAULT_SEEDS
+        self._median_seeds = _find_median_seeds(cfg, self._seeds)
 
     def generate(
         self,
@@ -140,12 +201,11 @@ class VisualizationReporter:
 
         loss_keys   = list(LOSS_FUNCTIONS.keys())
         loss_labels = list(LOSS_FUNCTIONS.values())
-        n_cols = len(loss_keys)
+        n_cols      = len(loss_keys)
 
         txt        = _LEGEND_TEXT[self._lang]
         row_labels = _ROW_LABELS[self._lang]
 
-        # Legend colors match the colorblind-safe error map palette (Wong 2011)
         legend_patches = [
             Patch(facecolor=(  0/255, 158/255, 115/255), edgecolor="#888",
                   label=txt["tp"]),
@@ -157,24 +217,19 @@ class VisualizationReporter:
                   label=txt["fn"]),
         ]
 
-        # ── Layout parameters (outside loop — same for every sample) ──────
+        # ── Layout parameters ─────────────────────────────────────────────────
         if self._lang == "en":
-            fig_w         = _FIG_W_EN_IN           # 7.244 in, A4 full-width
-            col_w         = fig_w / n_cols          # 1.207 in per column
-            # Derive row height from the first sample's actual pixel dimensions so
-            # the layout adapts to each dataset (DRIVE portrait vs STARE landscape).
-            # Floor: 1.12 in keeps 7 pt rotated labels (longest ≈ 1.09 in) safe.
+            fig_w         = _FIG_W_EN_IN
+            col_w         = fig_w / n_cols
             _min_row_h    = 1.12
             if sample_indices:
-                _ref       = np.squeeze(y_test[sample_indices[0]])
+                _ref           = np.squeeze(y_test[sample_indices[0]])
                 _img_h, _img_w = _ref.shape[:2]
-                _natural_h = col_w * (_img_h / _img_w)
+                _natural_h     = col_w * (_img_h / _img_w)
             else:
-                _natural_h = col_w   # fallback: square cells
+                _natural_h = col_w
             img_row_h     = max(_natural_h, _min_row_h)
             col_label_h   = 0.14
-            # legend_h must hold: title (8pt) + 2 patch-rows (ncol=2) + padding
-            # ≈ 0.111 + 2×0.167 + 0.10 = ~0.55 in to avoid overflow into col-label row
             legend_h      = 0.55
             _dpi          = 300
             _legend_ncol  = 2
@@ -197,7 +252,6 @@ class VisualizationReporter:
         leg_ratio       = legend_h    / img_row_h
         fig_h           = img_row_h * _N_IMG_ROWS + col_label_h + legend_h
 
-        # ── Font context — EN uses Helvetica 8 pt for journal quality ─────
         _rc_params = {}
         if self._lang == "en":
             _rc_params = {
@@ -219,7 +273,6 @@ class VisualizationReporter:
             for img_idx in sample_indices:
                 fig = plt.figure(figsize=(fig_w, fig_h))
 
-                # 6 image rows + 1 column-label row + 1 legend row
                 gs = gridspec.GridSpec(
                     _N_IMG_ROWS + 2, n_cols,
                     height_ratios=[1.0] * _N_IMG_ROWS + [col_label_ratio, leg_ratio],
@@ -229,23 +282,19 @@ class VisualizationReporter:
                     bottom=0.01,
                 )
 
-                # Image-row axes  [6 × n_cols]
                 axes = np.empty((_N_IMG_ROWS, n_cols), dtype=object)
                 for r in range(_N_IMG_ROWS):
                     for c in range(n_cols):
                         axes[r, c] = fig.add_subplot(gs[r, c])
 
-                # Column-label axes  [n_cols]
                 axes_labels = np.empty(n_cols, dtype=object)
                 for c in range(n_cols):
                     axes_labels[c] = fig.add_subplot(gs[_N_IMG_ROWS, c])
                     axes_labels[c].axis("off")
 
-                # Legend axes — spans all columns
                 ax_legend = fig.add_subplot(gs[_N_IMG_ROWS + 1, :])
                 ax_legend.axis("off")
 
-                # Suptitle for ID only (EN: journal format, no title)
                 if self._lang == "id":
                     fig.suptitle(
                         f"Segmentation Results — {self._cfg.name}   "
@@ -256,7 +305,6 @@ class VisualizationReporter:
                 gt      = y_test[img_idx]
                 gt_disp = gt.squeeze()   # (H, W) float32
 
-                # Zoom crop region — identical for all columns
                 H, W = gt_disp.shape
                 ch = int(H * self._zoom_frac)
                 cw = int(W * self._zoom_frac)
@@ -269,18 +317,41 @@ class VisualizationReporter:
                 for col_idx, (loss_key, loss_label) in enumerate(
                     zip(loss_keys, loss_labels)
                 ):
+                    seed_tag  = self._median_seeds.get(loss_key, f"seed{self._seeds[0]}")
                     pred_dir  = (
                         RESULTS_DIR / self._cfg.name.lower()
-                        / "predictions" / loss_key
+                        / "predictions" / f"{loss_key}_{seed_tag}"
                     )
                     pred_path = pred_dir / f"pred_{img_idx + 1:03d}.png"
-                    pred_img  = (
+                    prob_path = pred_dir / f"prob_{img_idx + 1:03d}.png"
+
+                    pred_img = (
                         cv2.imread(str(pred_path), cv2.IMREAD_GRAYSCALE)
                         if pred_path.exists() else None
                     )
+                    prob_img = (
+                        cv2.imread(str(prob_path), cv2.IMREAD_GRAYSCALE)
+                        if prob_path.exists() else None
+                    )
                     short_label = loss_label.replace(" (Baseline)", "")
 
-                    # ── Row 0: input image ────────────────────────────────
+                    # Build error map once — reused for row 4 and row 7
+                    err_map = None
+                    if pred_img is not None:
+                        pred_bin = (pred_img > 127).astype(np.uint8)
+                        gt_bin   = (gt_disp  > 0.5).astype(np.uint8)
+                        if pred_bin.shape != gt_bin.shape:
+                            pred_bin = cv2.resize(
+                                pred_bin,
+                                (gt_bin.shape[1], gt_bin.shape[0]),
+                                interpolation=cv2.INTER_NEAREST,
+                            )
+                        err_map = np.full((*gt_bin.shape, 3), 255, dtype=np.uint8)
+                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 158, 115]  # TP
+                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [230, 159,   0]  # FP
+                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0, 114, 178]  # FN
+
+                    # ── Row 0: Input image ────────────────────────────────────
                     orig = x_test[img_idx]
                     if orig.shape[-1] == 1:
                         orig_disp, cmap_orig = orig.squeeze(), "gray"
@@ -293,14 +364,26 @@ class VisualizationReporter:
                     ax.axis("off")
                     ax.set_title(short_label, fontsize=8, pad=3, fontweight="bold")
 
-                    # ── Row 1: ground truth ───────────────────────────────
+                    # ── Row 1: Ground truth ───────────────────────────────────
                     ax = axes[1, col_idx]
                     ax.imshow(gt_disp, cmap="gray", vmin=0, vmax=1)
                     _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
                     ax.axis("off")
 
-                    # ── Row 2: binary prediction ──────────────────────────
+                    # ── Row 2: Probability map (pre-threshold) ────────────────
                     ax = axes[2, col_idx]
+                    if prob_img is not None:
+                        ax.imshow(prob_img, cmap="gray", vmin=0, vmax=255)
+                        _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
+                    else:
+                        ax.set_facecolor("#f0f0f0")
+                        ax.text(0.5, 0.5, txt["na_detail"],
+                                ha="center", va="center",
+                                transform=ax.transAxes, fontsize=7, color="#666")
+                    ax.axis("off")
+
+                    # ── Row 3: Binary prediction ──────────────────────────────
+                    ax = axes[3, col_idx]
                     if pred_img is not None:
                         ax.imshow(pred_img, cmap="gray", vmin=0, vmax=255)
                         _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
@@ -311,25 +394,9 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Row 3: error map (TP / TN / FP / FN) ─────────────
-                    ax = axes[3, col_idx]
-                    if pred_img is not None:
-                        pred_bin = (pred_img > 127).astype(np.uint8)
-                        gt_bin   = (gt_disp  > 0.5).astype(np.uint8)
-
-                        if pred_bin.shape != gt_bin.shape:
-                            pred_bin = cv2.resize(
-                                pred_bin,
-                                (gt_bin.shape[1], gt_bin.shape[0]),
-                                interpolation=cv2.INTER_NEAREST,
-                            )
-
-                        # Colorblind-safe palette (Wong 2011):
-                        # TP=green, TN=white, FP=orange, FN=blue
-                        err_map = np.full((*gt_bin.shape, 3), 255, dtype=np.uint8)
-                        err_map[(pred_bin == 1) & (gt_bin == 1)] = [  0, 158, 115]  # TP bluish-green
-                        err_map[(pred_bin == 1) & (gt_bin == 0)] = [230, 159,   0]  # FP orange
-                        err_map[(pred_bin == 0) & (gt_bin == 1)] = [  0, 114, 178]  # FN blue
+                    # ── Row 4: Error map ──────────────────────────────────────
+                    ax = axes[4, col_idx]
+                    if err_map is not None:
                         ax.imshow(err_map)
                         _draw_zoom_box(ax, zx1, zy1, zx2, zy2)
                     else:
@@ -339,15 +406,16 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Row 4: zoomed ground truth ────────────────────────
-                    ax = axes[4, col_idx]
+                    # ── Row 5: Zoomed ground truth ────────────────────────────
+                    ax = axes[5, col_idx]
                     ax.imshow(gt_disp[zy1:zy2, zx1:zx2], cmap="gray", vmin=0, vmax=1)
                     ax.axis("off")
 
-                    # ── Row 5: zoomed binary prediction ───────────────────
-                    ax = axes[5, col_idx]
+                    # ── Row 6: Zoomed binary prediction ──────────────────────
+                    ax = axes[6, col_idx]
                     if pred_img is not None:
-                        ax.imshow(pred_img[zy1:zy2, zx1:zx2], cmap="gray", vmin=0, vmax=255)
+                        ax.imshow(pred_img[zy1:zy2, zx1:zx2], cmap="gray",
+                                  vmin=0, vmax=255)
                     else:
                         ax.set_facecolor("#f0f0f0")
                         ax.text(0.5, 0.5, txt["na"],
@@ -355,7 +423,18 @@ class VisualizationReporter:
                                 transform=ax.transAxes, fontsize=7, color="#666")
                     ax.axis("off")
 
-                    # ── Column label (dedicated gridspec row) ──────────────
+                    # ── Row 7: Zoomed error map ───────────────────────────────
+                    ax = axes[7, col_idx]
+                    if err_map is not None:
+                        ax.imshow(err_map[zy1:zy2, zx1:zx2])
+                    else:
+                        ax.set_facecolor("#f0f0f0")
+                        ax.text(0.5, 0.5, txt["na"],
+                                ha="center", va="center",
+                                transform=ax.transAxes, fontsize=7, color="#666")
+                    ax.axis("off")
+
+                    # ── Column label ──────────────────────────────────────────
                     axes_labels[col_idx].text(
                         0.5, 0.5, short_label,
                         transform=axes_labels[col_idx].transAxes,
@@ -363,7 +442,7 @@ class VisualizationReporter:
                         fontsize=8, fontweight="bold",
                     )
 
-                # ── Row labels on the left edge ───────────────────────────
+                # ── Row labels on left edge ───────────────────────────────────
                 for row_idx, row_label in enumerate(row_labels):
                     axes[row_idx, 0].text(
                         -0.10, 0.5, row_label,
@@ -373,7 +452,7 @@ class VisualizationReporter:
                         clip_on=False,
                     )
 
-                # ── Colour legend in the dedicated bottom row ──────────────
+                # ── Colour legend ─────────────────────────────────────────────
                 ax_legend.legend(
                     handles=legend_patches,
                     loc="center", ncol=_legend_ncol,
