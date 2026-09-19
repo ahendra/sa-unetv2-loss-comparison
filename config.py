@@ -180,13 +180,13 @@ class StareConfig:
 # ── Loss function registry ────────────────────────────────────────────────────
 
 LOSS_FUNCTIONS = {
-    "bce_mcc":    "BCE + MCC (Baseline)",
-    "dice":       "Dice Loss",
-    "focal":      "Focal Loss",
-    "cldice":     "clDice Loss",
-    "dice_ssim":  "Dice + SSIM",
-    "bce_ssim":   "BCE + SSIM",
-    "skel_recall": "Skeleton Recall Loss",
+    "bce_mcc":   "BCE + MCC (Baseline)",
+    "dice":      "Dice Loss",
+    "focal":     "Focal Loss",
+    "cldice":    "clDice Loss",
+    "dice_ssim": "Dice + SSIM",
+    "bce_ssim":  "BCE + SSIM",
+    # "skel_recall": "Skeleton Recall Loss",
 }
 
 # ── Loss function hyperparameters ─────────────────────────────────────────────

@@ -42,6 +42,7 @@ Retinal seg papers: Shit et al. (2021), Kirchhoff et al. (2024).
 
 import itertools
 import json
+import re as _re
 from pathlib import Path
 from typing import Dict, List, Optional, Union
 
@@ -84,6 +85,13 @@ _VIZ_LAYOUT = (2, 5)   # (n_rows, n_cols) for the matrix PNG
 
 # Effect-size thresholds for rank-biserial r_rb (Kerby 2014)
 _EFFECT_CATS = [(0.50, "Large"), (0.30, "Medium"), (0.10, "Small"), (0.00, "Negligible")]
+
+
+def _short_loss_label(lbl: str) -> str:
+    """Strip parenthetical notes and 'Loss' suffix; compact ' + ' → '+'."""
+    lbl = _re.sub(r"\s*\(.*?\)", "", lbl).strip()
+    lbl = _re.sub(r"\s+Loss$", "", lbl, flags=_re.IGNORECASE)
+    return lbl.replace(" + ", "+")
 
 
 def _sig_marker(p: Optional[float]) -> str:
@@ -657,7 +665,9 @@ class MultiSeedReporter:
                 if per_metric is None or m not in per_metric:
                     continue
                 data_per_loss.append(per_metric[m]["raw"])
-                valid_labels.append(LOSS_FUNCTIONS.get(loss_key, loss_key))
+                valid_labels.append(
+                    _short_loss_label(LOSS_FUNCTIONS.get(loss_key, loss_key))
+                )
                 valid_colors.append(color)
 
             if not data_per_loss:
@@ -674,7 +684,8 @@ class MultiSeedReporter:
                 ax.scatter(xs, raw, s=30, color="navy", alpha=0.6, zorder=3)
 
             ax.set_xticks(range(1, len(valid_labels) + 1))
-            ax.set_xticklabels(valid_labels, rotation=20, ha="right", fontsize=9)
+            ax.set_xticklabels(valid_labels, rotation=35, ha="right",
+                               rotation_mode="anchor", fontsize=9)
             ax.set_ylabel(_METRIC_LABELS.get(m, m), fontsize=10)
             ax.set_title(
                 f"Multi-Seed Distribution — {_METRIC_LABELS.get(m, m)}"
@@ -893,11 +904,8 @@ class MultiSeedReporter:
         loss_keys = list(LOSS_FUNCTIONS.keys())
         n = len(loss_keys)
 
-        # Abbreviated axis labels
-        short_labels = []
-        for lk in loss_keys:
-            lbl = LOSS_FUNCTIONS[lk]
-            short_labels.append(lbl[:9] if " " not in lbl else lbl.split()[0][:9])
+        # Axis labels: strip "(Baseline)" notes, trailing "Loss", compact "+" spacing
+        short_labels = [_short_loss_label(LOSS_FUNCTIONS[lk]) for lk in loss_keys]
 
         _COLORS = {
             "win":  "#27ae60",   # green
@@ -950,7 +958,8 @@ class MultiSeedReporter:
             ax.set_ylim(-0.5, n - 0.5)
             ax.set_xticks(range(n))
             ax.set_yticks(range(n))
-            ax.set_xticklabels(short_labels, rotation=40, ha="right", fontsize=7.5)
+            ax.set_xticklabels(short_labels, rotation=45, ha="right",
+                               rotation_mode="anchor", fontsize=7.5)
             ax.set_yticklabels(list(reversed(short_labels)), fontsize=7.5)
             # Mark lower-is-better metrics with ↓ in title
             title = _METRIC_LABELS.get(metric, metric)
@@ -987,7 +996,7 @@ class MultiSeedReporter:
             fontsize=9, y=1.01,
         )
 
-        plt.tight_layout(rect=[0, 0.05, 1, 1.0])
+        plt.tight_layout(rect=[0, 0.07, 1, 1.0], h_pad=3.0, w_pad=2.0)
 
         out_path = self.out_dir / "significance_matrix.png"
         fig.savefig(str(out_path), dpi=200, bbox_inches="tight", facecolor="white")
@@ -1029,7 +1038,7 @@ class MultiSeedReporter:
         metric_order = {m: i for i, m in enumerate(_ALL_METRICS)}
         sig_rows.sort(key=lambda r: (metric_order.get(r["metric"], 99), -abs(r["r_rb"])))
 
-        CW = {"m": 18, "w": 24, "l": 24}  # column widths
+        CW = {"m": 18, "w": 16, "l": 16}  # column widths (short labels ≤ 9 chars)
         hdr = (
             f"  {'Metric':<{CW['m']}}  {'Winner':<{CW['w']}}  "
             f"{'Loser':<{CW['l']}}  {'W':>7}  {'p_holm':>9}  "
@@ -1051,8 +1060,12 @@ class MultiSeedReporter:
                     body.append("")   # blank line between metric groups
                 prev_metric = r["metric"]
 
-                wlabel = LOSS_FUNCTIONS.get(r["winner"] or "", r["winner"] or "?")
-                llabel = LOSS_FUNCTIONS.get(r["loser"]  or "", r["loser"]  or "?")
+                wlabel = _short_loss_label(
+                    LOSS_FUNCTIONS.get(r["winner"] or "", r["winner"] or "?")
+                )
+                llabel = _short_loss_label(
+                    LOSS_FUNCTIONS.get(r["loser"] or "", r["loser"] or "?")
+                )
                 W_val  = r["W"]
                 W_str  = f"{W_val:.1f}" if W_val == W_val else "?"  # NaN → "?"
                 p_str  = f"{r['p_holm']:.4f}" if r["p_holm"] is not None else "?"
