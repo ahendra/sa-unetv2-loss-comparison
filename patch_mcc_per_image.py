@@ -6,7 +6,7 @@ per_image_metrics, dihitung dari prediction images yang sudah tersimpan.
 
 Tidak memerlukan re-training atau re-inference.
 Jalankan dari root project:
-    python sa_unetv2_loss_comparison/patch_mcc_per_image.py
+    %run patch_mcc_per_image.py
 
 Setelah selesai, jalankan ulang hanya section 4.10 multiseed reporter agar
 pairwise_wilcoxon.json dan significance_matrix.png di-regenerate.
@@ -43,10 +43,12 @@ DATASET_CFG = {
 
 
 def _load_sorted_pngs(folder: Path) -> list[np.ndarray]:
-    files = sorted(folder.glob("*.png"))
-    if not files:
-        raise FileNotFoundError(f"Tidak ada file PNG di: {folder}")
-    return [cv2.imread(str(f), cv2.IMREAD_GRAYSCALE) for f in files]
+    # Coba beberapa ekstensi — mask DRIVE asli berformat .gif
+    for pattern in ("*.png", "*.gif", "*.tif", "*.tiff", "*.jpg", "*.bmp"):
+        files = sorted(folder.glob(pattern))
+        if files:
+            return [cv2.imread(str(f), cv2.IMREAD_GRAYSCALE) for f in files]
+    raise FileNotFoundError(f"Tidak ada file gambar (png/gif/tif/jpg) di: {folder}")
 
 
 def _compute_mcc_per_image(
